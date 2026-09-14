@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "error": {
+    "code": "CAPABILITY_NOT_FOUND",
+    "message": "no reviewed command knowledge matched the intent",
+    "hint": "Try a more specific Git intent.",
+    "retryable": false
+  }
+}

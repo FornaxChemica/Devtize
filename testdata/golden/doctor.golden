@@ -1,0 +1,6 @@
+Devtize doctor: warning
+config: valid
+project: not found
+gh: installed 2.80.0; auth auth_unknown
+git: installed 2.51.0
+registry: available (builtin_only; 12 reviewed builtin entries)

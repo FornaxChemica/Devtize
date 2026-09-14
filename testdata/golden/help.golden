@@ -1,0 +1,18 @@
+Devtize is a local-first developer command layer
+
+Usage:
+  dvz [command]
+
+Available Commands:
+  doctor      Inspect local Devtize readiness without making changes
+  find        Find reviewed command knowledge without executing it
+  help        Help about any command
+  repo        Plan and run the Phase B repository self-hosting workflow
+  version     Show Devtize build information
+
+Flags:
+  -h, --help       help for dvz
+      --json       emit versioned JSON output
+      --no-color   disable colored output
+
+Use "dvz [command] --help" for more information about a command.

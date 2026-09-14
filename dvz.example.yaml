@@ -1,0 +1,16 @@
+version: 1
+ui:
+  color: auto
+ai:
+  provider: disabled
+safety:
+  confirm_local_writes: true
+  confirm_remote_writes: true
+  allow_yes_for:
+    - local_write
+history:
+  enabled: true
+git:
+  default_branch: main
+github:
+  visibility: private

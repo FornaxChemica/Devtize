@@ -1,0 +1,5 @@
+git init
+  Create an empty Git repository in a folder.
+  source: builtin; risk: local_write; match: exact reviewed phrase (high)
+  versions: >=2.23 (not_checked)
+  effect: creates Git metadata in the selected folder
