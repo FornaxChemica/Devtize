@@ -9,7 +9,7 @@ The product must remain valuable with AI disabled. Deterministic code owns detec
 ## Naming contract
 
 - Use **Devtize** for the product and open-source project in prose, headings, release notes, and branding.
-- Use **`devtize`** as the default repository name.
+- Use **`Devtize`** as the default repository name.
 - Use **`dvz`** for the executable and command examples.
 - Do not use `dvz` as though it were the product's proper name when “Devtize” is intended.
 - Do not rename the executable to `devtize` without an explicit product decision.

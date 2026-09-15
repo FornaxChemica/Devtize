@@ -18,9 +18,12 @@ Phase B also has trusted capabilities implemented in source code, not inferred f
 - `github.auth.inspect`
 - `github.repo.inspect`
 - `github.repo.create`
+- `github.repo.description.update`
 
-These capabilities are available only through the `dvz repo create`, `dvz repo plan`, and `dvz repo status` application paths. They have typed inputs, risk metadata, adapter bindings, plan rendering, confirmation policy, and tests. The recovery-only `git.index.untrack` and `git.commit.amend_initial` capabilities are reachable solely through `--repair-unpushed-initial` after its unpublished-history preconditions pass. `git.remote.update` is limited to changing protocol for two canonical URLs that identify the same GitHub repository. Help text or synced knowledge cannot promote itself into this list.
+These capabilities are available only through the typed `dvz repo` application paths. `github.repo.description.update` is restricted to `repo set-description`, requires remote-write confirmation for the exact plan digest, and verifies the remote value after mutation. The capabilities have typed inputs, risk metadata, adapter bindings, plan rendering, confirmation policy, and tests. The recovery-only `git.index.untrack` and `git.commit.amend_initial` capabilities are reachable solely through `--repair-unpushed-initial` after its unpublished-history preconditions pass. `git.remote.update` is limited to changing protocol for two canonical URLs that identify the same GitHub repository. Help text or synced knowledge cannot promote itself into this list.
 
 `git.commit.amend_initial_preserve_message` and `git.branch.force_push_with_lease` are additionally restricted to `repo redact-initial`. The latter schema requires the exact expected remote commit and always renders `--force-with-lease=refs/heads/<branch>:<sha>`; no plain-force capability exists.
+
+Phase C reuses the reviewed `git.index.stage` and `git.commit.create` capabilities through `dvz commit`. That path requires a clean index, exact changed-path disclosure, content digests, Conventional Commit validation by default, and postcondition verification. It does not make command knowledge executable.
 
 The corpus is available offline. A future `dvz sync` may supplement it with bounded, version-matched CLI help, but introspected help will remain quarantined discovery data with provenance and cannot create trusted mutation capabilities.

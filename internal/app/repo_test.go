@@ -131,9 +131,11 @@ func (g *fakeGit) fail(capability string) error {
 }
 
 type fakeGH struct {
-	auth        ghadapter.AuthResult
-	repo        ghadapter.RepoResult
-	createCalls int
+	auth                   ghadapter.AuthResult
+	repo                   ghadapter.RepoResult
+	createCalls            int
+	updateDescriptionCalls int
+	failUpdateDescription  bool
 }
 
 func (g *fakeGH) InspectAuth(context.Context, ghadapter.AuthInput) (ghadapter.AuthResult, error) {
@@ -145,6 +147,14 @@ func (g *fakeGH) InspectRepo(context.Context, ghadapter.RepoInput) (ghadapter.Re
 func (g *fakeGH) CreateRepo(context.Context, ghadapter.RepoInput) (ghadapter.RepoResult, error) {
 	g.createCalls++
 	g.repo.Exists = true
+	return g.repo, nil
+}
+func (g *fakeGH) UpdateRepoDescription(_ context.Context, input ghadapter.RepoInput) (ghadapter.RepoResult, error) {
+	g.updateDescriptionCalls++
+	if g.failUpdateDescription {
+		return ghadapter.RepoResult{}, errors.New("boom")
+	}
+	g.repo.Description = input.Description
 	return g.repo, nil
 }
 
@@ -163,6 +173,105 @@ func TestRepoPlanDryRunDoesNotMutate(t *testing.T) {
 	}
 	if git.initCalls+git.stageCalls+git.commitCalls+git.remoteCalls+git.updateCalls+git.pushCalls+gh.createCalls != 0 {
 		t.Fatalf("dry-run plan mutated: git=%#v gh=%#v", git, gh)
+	}
+}
+
+func TestRepoDescriptionDryRunPlansWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	gh := &fakeGH{
+		auth: ghadapter.AuthResult{Status: "authenticated", Owner: "OWNER"},
+		repo: ghadapter.RepoResult{Exists: true, NameWithOwner: "OWNER/Devtize", Description: "old"},
+	}
+	service := testRepoService(dir, &fakeGit{}, gh)
+	options := RepoDescriptionOptions{Name: "Devtize", Description: "new", DryRun: true}
+	response, err := service.PlanDescription(context.Background(), options)
+	if err != nil {
+		t.Fatalf("plan description: %v", err)
+	}
+	response, err = service.ExecuteDescriptionPlanned(context.Background(), options, strings.NewReader("yes\n"), response)
+	if err != nil {
+		t.Fatalf("execute dry run: %v", err)
+	}
+	if response.Plan.Digest == "" || len(response.Plan.Operations) != 1 || gh.updateDescriptionCalls != 0 {
+		t.Fatalf("dry-run result = %#v, update calls = %d", response, gh.updateDescriptionCalls)
+	}
+}
+
+func TestRepoDescriptionRequiresDigestBoundRemoteConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	gh := &fakeGH{
+		auth: ghadapter.AuthResult{Status: "authenticated", Owner: "OWNER"},
+		repo: ghadapter.RepoResult{Exists: true, NameWithOwner: "OWNER/Devtize"},
+	}
+	service := testRepoService(dir, &fakeGit{}, gh)
+	options := RepoDescriptionOptions{Name: "Devtize", Description: "new"}
+	response, err := service.PlanDescription(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Plan.Operations[0].Inputs["description"] = "changed after planning"
+	_, err = service.ExecuteDescriptionPlanned(context.Background(), options, strings.NewReader("yes\n"), response)
+	if err == nil || gh.updateDescriptionCalls != 0 {
+		t.Fatalf("changed plan was authorized: err=%v calls=%d", err, gh.updateDescriptionCalls)
+	}
+
+	response, err = service.PlanDescription(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.ExecuteDescriptionPlanned(context.Background(), options, strings.NewReader("no\n"), response)
+	if err == nil || gh.updateDescriptionCalls != 0 {
+		t.Fatalf("declined plan mutated: err=%v calls=%d", err, gh.updateDescriptionCalls)
+	}
+}
+
+func TestRepoDescriptionRefusesStaleRemoteAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	gh := &fakeGH{
+		auth: ghadapter.AuthResult{Status: "authenticated", Owner: "OWNER"},
+		repo: ghadapter.RepoResult{Exists: true, NameWithOwner: "OWNER/Devtize", Description: "old"},
+	}
+	service := testRepoService(dir, &fakeGit{}, gh)
+	options := RepoDescriptionOptions{Name: "Devtize", Description: "new"}
+	response, err := service.PlanDescription(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.repo.Description = "concurrent change"
+	_, err = service.ExecuteDescriptionPlanned(context.Background(), options, strings.NewReader("yes\n"), response)
+	if err == nil || gh.updateDescriptionCalls != 0 {
+		t.Fatalf("stale remote was overwritten: err=%v calls=%d", err, gh.updateDescriptionCalls)
+	}
+
+	gh.repo.Description = "new"
+	response, err = service.PlanDescription(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = service.ExecuteDescriptionPlanned(context.Background(), options, nil, response)
+	if err != nil || response.Status != operation.StatusSucceeded || gh.updateDescriptionCalls != 0 {
+		t.Fatalf("matching description was not idempotent: response=%#v err=%v", response, err)
+	}
+}
+
+func TestRepoDescriptionUpdatesAndVerifies(t *testing.T) {
+	dir := t.TempDir()
+	gh := &fakeGH{
+		auth: ghadapter.AuthResult{Status: "authenticated", Owner: "OWNER"},
+		repo: ghadapter.RepoResult{Exists: true, NameWithOwner: "OWNER/Devtize"},
+	}
+	service := testRepoService(dir, &fakeGit{}, gh)
+	options := RepoDescriptionOptions{Name: "Devtize", Description: "One universal command layer"}
+	response, err := service.PlanDescription(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = service.ExecuteDescriptionPlanned(context.Background(), options, strings.NewReader("yes\n"), response)
+	if err != nil {
+		t.Fatalf("execute description: %v", err)
+	}
+	if response.Status != operation.StatusSucceeded || response.GitHubRepo.Description != options.Description || gh.updateDescriptionCalls != 1 {
+		t.Fatalf("unexpected response=%#v calls=%d", response, gh.updateDescriptionCalls)
 	}
 }
 
@@ -717,7 +826,7 @@ func (r *scriptedRunner) Run(_ context.Context, spec devprocess.CommandSpec) (de
 		return devprocess.CommandResult{}, &devprocess.RunError{Kind: devprocess.ErrorExit, ExitCode: 128, Message: "not a repository"}
 	case joined == "gh auth status":
 		return devprocess.CommandResult{Stdout: "Logged in to github.com as OWNER\n"}, nil
-	case joined == "gh repo view OWNER/repo --json nameWithOwner,visibility,url,sshUrl,defaultBranchRef":
+	case joined == "gh repo view OWNER/repo --json nameWithOwner,visibility,description,url,sshUrl,defaultBranchRef":
 		return devprocess.CommandResult{}, &devprocess.RunError{Kind: devprocess.ErrorExit, ExitCode: 1, Message: "not found"}
 	case joined == "git init --initial-branch main":
 		return devprocess.CommandResult{}, nil

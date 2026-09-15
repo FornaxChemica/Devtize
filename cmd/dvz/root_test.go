@@ -24,6 +24,10 @@ type repoDeclineRunner struct {
 	t *testing.T
 }
 
+type descriptionDeclineRunner struct {
+	t *testing.T
+}
+
 func (r *repoDeclineRunner) Run(_ context.Context, spec devprocess.CommandSpec) (devprocess.CommandResult, error) {
 	joined := spec.Executable + " " + strings.Join(spec.Args, " ")
 	switch joined {
@@ -31,8 +35,21 @@ func (r *repoDeclineRunner) Run(_ context.Context, spec devprocess.CommandSpec) 
 		return devprocess.CommandResult{}, &devprocess.RunError{Kind: devprocess.ErrorExit, ExitCode: 128, Message: "not a repository"}
 	case "gh auth status":
 		return devprocess.CommandResult{Stdout: "Logged in to github.com as OWNER\nGit operations protocol: https\n"}, nil
-	case "gh repo view OWNER/repo --json nameWithOwner,visibility,url,sshUrl,defaultBranchRef":
+	case "gh repo view OWNER/repo --json nameWithOwner,visibility,description,url,sshUrl,defaultBranchRef":
 		return devprocess.CommandResult{}, &devprocess.RunError{Kind: devprocess.ErrorExit, ExitCode: 1, Message: "not found"}
+	default:
+		r.t.Fatalf("mutation or unexpected command ran before declined confirmation: %s", joined)
+		return devprocess.CommandResult{}, nil
+	}
+}
+
+func (r *descriptionDeclineRunner) Run(_ context.Context, spec devprocess.CommandSpec) (devprocess.CommandResult, error) {
+	joined := spec.Executable + " " + strings.Join(spec.Args, " ")
+	switch joined {
+	case "gh auth status":
+		return devprocess.CommandResult{Stdout: "Logged in to github.com as OWNER\nGit operations protocol: https\n"}, nil
+	case "gh repo view OWNER/Devtize --json nameWithOwner,visibility,description,url,sshUrl,defaultBranchRef":
+		return devprocess.CommandResult{Stdout: `{"nameWithOwner":"OWNER/Devtize","visibility":"PUBLIC","description":"old"}`}, nil
 	default:
 		r.t.Fatalf("mutation or unexpected command ran before declined confirmation: %s", joined)
 		return devprocess.CommandResult{}, nil
@@ -198,6 +215,29 @@ func TestRepoCreateRendersExactPlanBeforeConfirmation(t *testing.T) {
 	promptAt := strings.Index(output, "Apply local repository changes")
 	if planAt < 0 || operationsAt < planAt || promptAt < operationsAt {
 		t.Fatalf("plan was not fully rendered before confirmation:\n%s", output)
+	}
+}
+
+func TestRepoSetDescriptionRendersExactPlanBeforeRemoteConfirmation(t *testing.T) {
+	deps := testDependencies(t, &descriptionDeclineRunner{t: t})
+	var stdout, stderr bytes.Buffer
+	command, _, err := newRootCommand(deps, &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.SetIn(strings.NewReader("no\n"))
+	command.SetArgs([]string{"repo", "set-description", "--owner", "OWNER", "--name", "Devtize", "--description", "One universal command layer"})
+	err = command.Execute()
+	if err == nil {
+		t.Fatal("declined confirmation unexpectedly succeeded")
+	}
+	output := stdout.String()
+	planAt := strings.Index(output, "Plan ")
+	descriptionAt := strings.Index(output, "new description: One universal command layer")
+	operationsAt := strings.Index(output, "operations:")
+	promptAt := strings.Index(output, "Update the GitHub repository description")
+	if planAt < 0 || descriptionAt < planAt || operationsAt < descriptionAt || promptAt < operationsAt {
+		t.Fatalf("description plan was not fully rendered before confirmation:\n%s", output)
 	}
 }
 

@@ -48,6 +48,7 @@ type RepoResult struct {
 	Exists        bool   `json:"exists"`
 	NameWithOwner string `json:"name_with_owner,omitempty"`
 	Visibility    string `json:"visibility,omitempty"`
+	Description   string `json:"description,omitempty"`
 	URL           string `json:"url,omitempty"`
 	SSHURL        string `json:"ssh_url,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
@@ -68,7 +69,7 @@ func (a Adapter) InspectAuth(ctx context.Context, input AuthInput) (AuthResult, 
 }
 
 func (a Adapter) InspectRepo(ctx context.Context, input RepoInput) (RepoResult, error) {
-	result, err := a.run(ctx, input.ProjectRoot, "repo", "view", input.Owner+"/"+input.Name, "--json", "nameWithOwner,visibility,url,sshUrl,defaultBranchRef")
+	result, err := a.run(ctx, input.ProjectRoot, "repo", "view", input.Owner+"/"+input.Name, "--json", "nameWithOwner,visibility,description,url,sshUrl,defaultBranchRef")
 	if err != nil {
 		var runErr *devprocess.RunError
 		if errors.As(err, &runErr) && runErr.Kind == devprocess.ErrorExit {
@@ -79,6 +80,7 @@ func (a Adapter) InspectRepo(ctx context.Context, input RepoInput) (RepoResult, 
 	var payload struct {
 		NameWithOwner string `json:"nameWithOwner"`
 		Visibility    string `json:"visibility"`
+		Description   string `json:"description"`
 		URL           string `json:"url"`
 		SSHURL        string `json:"sshUrl"`
 		DefaultBranch *struct {
@@ -90,12 +92,20 @@ func (a Adapter) InspectRepo(ctx context.Context, input RepoInput) (RepoResult, 
 	}
 	repo := RepoResult{
 		Exists: true, NameWithOwner: payload.NameWithOwner, Visibility: strings.ToLower(payload.Visibility),
-		URL: payload.URL, SSHURL: payload.SSHURL,
+		Description: payload.Description, URL: payload.URL, SSHURL: payload.SSHURL,
 	}
 	if payload.DefaultBranch != nil {
 		repo.DefaultBranch = payload.DefaultBranch.Name
 	}
 	return repo, nil
+}
+
+func (a Adapter) UpdateRepoDescription(ctx context.Context, input RepoInput) (RepoResult, error) {
+	_, err := a.run(ctx, input.ProjectRoot, "repo", "edit", input.Owner+"/"+input.Name, "--description", input.Description)
+	if err != nil {
+		return RepoResult{}, err
+	}
+	return a.InspectRepo(ctx, input)
 }
 
 func (a Adapter) CreateRepo(ctx context.Context, input RepoInput) (RepoResult, error) {

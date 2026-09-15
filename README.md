@@ -1,14 +1,16 @@
 # Devtize
 
-Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI currently provides the Phase B self-hosting slice: it can inspect local readiness, search a reviewed offline Git command catalog, and run one typed Git/GitHub repository publishing workflow behind immutable plans and confirmation. The project is pre-release and its public interfaces may still change.
+Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides the completed Phase B self-hosting workflows and the first Phase C daily Git slice: it can inspect local readiness, search a reviewed offline Git command catalog, publish a repository, and create a verified commit behind immutable plans and confirmation. The project is pre-release and its public interfaces may still change.
 
 ## Current Features
 
 - `dvz version` reports deterministic build metadata.
 - `dvz doctor` checks configuration, project evidence, Git, GitHub CLI, and the built-in registry without making changes.
 - `dvz find <intent>` searches reviewed Git knowledge offline and never executes a result.
+- `dvz commit` creates a Conventional Commit from explicitly disclosed changed paths.
 - `dvz repo plan` renders the self-hosting repository plan without mutation.
 - `dvz repo create` initializes and publishes a repository through reviewed Git and `gh` adapters after confirmation.
+- `dvz repo set-description` safely updates existing GitHub repository metadata through a digest-bound plan.
 - `dvz repo status` inspects local repository state without mutation.
 - Text output and versioned JSON output through `--json`.
 - Strict YAML configuration and a context-aware, no-shell subprocess boundary for tool detection and reviewed adapters.
@@ -20,7 +22,7 @@ Devtize keeps discovery and execution separate:
 ```text
 dvz find initialize git repository   # implemented: discover only
 dvz raw initialize git repository    # roadmap: typed proposal and confirmation
-dvz repo create --message "Initial commit" --owner OWNER --name devtize
+dvz repo create --message "Initial commit" --owner OWNER --name Devtize
                                      # implemented: typed self-hosting workflow
 dvz ship                             # roadmap: broader engineered workflow
 dvz git status                       # roadmap: policy-controlled tool access
@@ -38,7 +40,9 @@ go build -o dvz ./cmd/dvz
 ./dvz version
 ./dvz doctor
 ./dvz find initialize git repository
-./dvz repo plan --owner OWNER --name devtize --message "Initial commit"
+./dvz commit README.md --message "docs: update readme" --dry-run
+./dvz repo plan --owner OWNER --name Devtize --message "Initial commit"
+./dvz repo set-description --owner OWNER --name Devtize --description "One universal command layer"
 ./dvz --json find show working tree changes
 ```
 
@@ -81,6 +85,10 @@ Knowledge entries describe their effects with one of these risk classes:
 dvz repo redact-initial MASTER_IDE_PROMPT.md
 ```
 
+`dvz repo set-description` inspects the current GitHub description, displays the old and new values in an immutable plan, and requires a digest-bound remote-write confirmation. It skips mutation when the value already matches, refuses a stale plan when the remote value changes, supports `--dry-run` and `--plan-json`, and verifies the result after `gh repo edit`.
+
+`dvz commit [paths...] --message <message>` is the first Phase C daily workflow. It requires Conventional Commit syntax by default, a clean index, an attached branch, exact changed paths, stable file digests, and the digest-bound confirmation word `commit`. With no paths it discloses all current non-ignored changes. `--conventional=false` permits another explicit single-line message. Dry-run and plan JSON never stage or commit.
+
 ## Support Matrix
 
 | Provider or area | Level | Notes |
@@ -88,7 +96,8 @@ dvz repo redact-initial MASTER_IDE_PROMPT.md
 | Git installation | detected | Executable and version only |
 | Git commands | discoverable | Twelve reviewed built-in entries |
 | Git self-hosting capabilities | workflow-ready | Init, inspect, stage, commit, remote verify/add, push through `dvz repo create` |
-| GitHub CLI (`gh`) | workflow-ready | Auth preflight and repository creation for the Phase B workflow |
+| Daily Git commit | workflow-ready | Explicit changed-path selection and Conventional Commit validation through `dvz commit` |
+| GitHub CLI (`gh`) | workflow-ready | Auth preflight, repository creation, and guarded description updates |
 | Go projects | detected | `go.mod` evidence |
 | JavaScript projects | detected | Metadata and recognized lockfile evidence |
 | Other runtimes and tools | planned | Not implemented |
@@ -153,10 +162,10 @@ No separate linter is configured in Phase B. CI runs formatting verification, te
 
 ## Roadmap And Self-Hosting
 
-Phase B is the current implementation. It adds reviewed Git and GitHub adapters and an immutable plan that can initialize this folder, disclose and stage eligible files, commit, create the GitHub repository, configure `origin`, push without force, and verify postconditions. The first maintainer-run attempt initialized Git, created the initial commit and private GitHub repository, and configured `origin`, but stopped before push. Its initial commit included generated artifacts, so the milestone remains incomplete pending the guarded repair command documented in the Phase B plan.
+Phase B is complete. It adds reviewed Git and GitHub adapters and an immutable plan that initialized this folder, disclosed and staged eligible files, committed, created the GitHub repository, configured `origin`, pushed, and verified postconditions. The maintainer completed the guarded initial redaction through Devtize; sanitized evidence is recorded in [docs/self-hosting.md](docs/self-hosting.md).
 
 ```sh
-./dvz repo create --owner OWNER --name devtize --visibility private \
+./dvz repo create --owner OWNER --name Devtize --visibility private \
   --message "chore: self-host Devtize with Devtize" \
   --repair-unpushed-initial
 ```

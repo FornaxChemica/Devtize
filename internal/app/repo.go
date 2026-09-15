@@ -48,6 +48,23 @@ type RedactInitialOptions struct {
 	PlanJSON bool
 }
 
+type RepoDescriptionOptions struct {
+	Owner       string
+	Name        string
+	Description string
+	DryRun      bool
+	PlanJSON    bool
+}
+
+type RepoDescriptionResponse struct {
+	SchemaVersion int                       `json:"schema_version"`
+	Status        operation.Status          `json:"status"`
+	Plan          operation.Plan            `json:"plan"`
+	GitHubAuth    ghadapter.AuthResult      `json:"github_auth"`
+	GitHubRepo    ghadapter.RepoResult      `json:"github_repo"`
+	Result        operation.ExecutionResult `json:"result,omitempty"`
+}
+
 type RepoResponse struct {
 	SchemaVersion int                          `json:"schema_version"`
 	Status        operation.Status             `json:"status"`
@@ -101,6 +118,119 @@ type GitHubPort interface {
 	InspectAuth(context.Context, ghadapter.AuthInput) (ghadapter.AuthResult, error)
 	InspectRepo(context.Context, ghadapter.RepoInput) (ghadapter.RepoResult, error)
 	CreateRepo(context.Context, ghadapter.RepoInput) (ghadapter.RepoResult, error)
+	UpdateRepoDescription(context.Context, ghadapter.RepoInput) (ghadapter.RepoResult, error)
+}
+
+func (s RepoService) PlanDescription(ctx context.Context, options RepoDescriptionOptions) (RepoDescriptionResponse, error) {
+	s = s.withDefaultAdapters()
+	root, err := filepath.Abs(s.WorkingDir)
+	if err != nil {
+		return RepoDescriptionResponse{}, Wrap(CodeProjectNotFound, "project root could not be resolved", err)
+	}
+	auth, err := s.GitHub.InspectAuth(ctx, ghadapter.AuthInput{ProjectRoot: root})
+	if err != nil {
+		return RepoDescriptionResponse{}, classifyProcess("gh", "inspect GitHub authentication", err)
+	}
+	if auth.Status != "authenticated" {
+		return RepoDescriptionResponse{}, &Error{Code: CodeAuthRequired, Message: "GitHub authentication is required for remote writes", Hint: "Run gh auth login, then rerun the same dvz repo set-description command."}
+	}
+	owner := firstNonEmpty(options.Owner, auth.Owner)
+	if owner == "" || !safeName.MatchString(owner) {
+		return RepoDescriptionResponse{}, &Error{Code: CodePlanInvalid, Message: "GitHub owner is invalid", Hint: "Pass --owner <owner-or-org>."}
+	}
+	if options.Name == "" || strings.HasPrefix(options.Name, "-") || !safeName.MatchString(options.Name) {
+		return RepoDescriptionResponse{}, &Error{Code: CodePlanInvalid, Message: "repository name is invalid", Hint: "Pass --name <repository>."}
+	}
+	if strings.TrimSpace(options.Description) == "" {
+		return RepoDescriptionResponse{}, &Error{Code: CodePlanInvalid, Message: "repository description cannot be empty"}
+	}
+	repo, err := s.GitHub.InspectRepo(ctx, ghadapter.RepoInput{ProjectRoot: root, Owner: owner, Name: options.Name})
+	if err != nil {
+		return RepoDescriptionResponse{}, classifyProcess("gh", "inspect GitHub repository", err)
+	}
+	if !repo.Exists {
+		return RepoDescriptionResponse{}, &Error{Code: CodePreconditionFailed, Message: "GitHub repository does not exist", Hint: "Verify --owner and --name before retrying."}
+	}
+	var operations []operation.Operation
+	if repo.Description != options.Description {
+		operations = append(operations, operation.Operation{
+			ID: "op_github_description_update", CapabilityID: "github.repo.description.update", ProviderID: "gh",
+			Summary: "Update GitHub repository description", Risk: safety.RiskRemoteWrite,
+			Effects: []operation.Effect{{Kind: "update_repository_description", Target: owner + "/" + options.Name}},
+			Inputs:  map[string]any{"project_root": root, "owner": owner, "name": options.Name, "previous_description": repo.Description, "description": options.Description},
+		})
+	}
+	now := s.now()
+	plan := operation.Plan{
+		SchemaVersion: 1, ID: "plan_repo_set_description_" + now.Format("20060102150405"),
+		Intent: "Set the GitHub repository description", CreatedAt: now, ProjectRoot: root,
+		DryRun: options.DryRun || options.PlanJSON, Operations: operations,
+	}
+	plan, err = plan.WithDigest()
+	if err != nil {
+		return RepoDescriptionResponse{}, Wrap(CodePlanInvalid, "description plan could not be digested", err)
+	}
+	status := operation.StatusProposed
+	if plan.DryRun {
+		status = operation.StatusValidated
+	}
+	return RepoDescriptionResponse{SchemaVersion: 1, Status: status, Plan: plan, GitHubAuth: auth, GitHubRepo: repo}, nil
+}
+
+func (s RepoService) ExecuteDescriptionPlanned(ctx context.Context, options RepoDescriptionOptions, prompts io.Reader, response RepoDescriptionResponse) (RepoDescriptionResponse, error) {
+	s = s.withDefaultAdapters()
+	digest, err := operation.Digest(response.Plan)
+	if err != nil || digest != response.Plan.Digest {
+		return response, &Error{Code: CodePlanInvalid, Message: "authorized description plan digest is invalid", Cause: err}
+	}
+	if options.DryRun || options.PlanJSON {
+		return response, nil
+	}
+	result := operation.ExecutionResult{SchemaVersion: 1, PlanID: response.Plan.ID, PlanDigest: response.Plan.Digest}
+	if len(response.Plan.Operations) == 0 {
+		result.Status = operation.StatusSucceeded
+		response.Status = operation.StatusSucceeded
+		response.Result = result
+		return response, nil
+	}
+	op := response.Plan.Operations[0]
+	current, inspectErr := s.GitHub.InspectRepo(ctx, ghadapter.RepoInput{ProjectRoot: response.Plan.ProjectRoot, Owner: stringInput(op, "owner"), Name: stringInput(op, "name")})
+	if inspectErr != nil || !current.Exists || current.Description != stringInput(op, "previous_description") {
+		return response, &Error{Code: CodePreconditionFailed, Message: "GitHub repository description changed after planning", Cause: inspectErr, Hint: "No mutation was performed. Build and review a fresh description plan."}
+	}
+	answers := newConfirmationReader(prompts, s.Output)
+	ok, confirmErr := answers.confirm("Update the GitHub repository description", response.Plan.Digest, "yes")
+	if confirmErr != nil || !ok {
+		response.Status = operation.StatusCancelled
+		result.Status = operation.StatusCancelled
+		result.RecoveryHints = []string{"The repository description was not changed. Rerun the same command to build a fresh plan."}
+		response.Result = result
+		return response, &Error{Code: CodeConfirmationDeclined, Message: "confirmation declined", Hint: result.RecoveryHints[0]}
+	}
+	result.Status = operation.StatusRunning
+	step := s.runStep(ctx, op, RepoResponse{Plan: response.Plan, GitHubRepo: response.GitHubRepo})
+	result.Steps = append(result.Steps, step)
+	if step.Status == operation.StatusFailed {
+		result.Status = operation.StatusPartiallyCompleted
+		result.RecoveryHints = []string{step.RecoveryHint}
+		response.Result = result
+		return response, &Error{Code: CodePartialExecution, Message: step.ErrorMessage, Hint: step.RecoveryHint}
+	}
+	updated, inspectErr := s.GitHub.InspectRepo(ctx, ghadapter.RepoInput{ProjectRoot: response.Plan.ProjectRoot, Owner: stringInput(op, "owner"), Name: stringInput(op, "name")})
+	if inspectErr != nil || !updated.Exists || updated.Description != stringInput(op, "description") {
+		result.Status = operation.StatusPartiallyCompleted
+		result.RecoveryHints = []string{"Inspect the repository description on GitHub, then rerun the same command; Devtize will plan from the observed value."}
+		response.Result = result
+		return response, &Error{Code: CodePostconditionFailed, Message: "GitHub repository description could not be verified", Cause: inspectErr, Hint: result.RecoveryHints[0]}
+	}
+	result.Status = operation.StatusSucceeded
+	response.Status = operation.StatusSucceeded
+	response.GitHubRepo = updated
+	response.Result = result
+	if err := s.writeHistoryInvocation(RepoResponse{Plan: response.Plan}, result, map[string]any{"repo_set_description": stringInput(op, "owner") + "/" + stringInput(op, "name")}); err != nil {
+		return response, &Error{Code: CodeHistoryWriteFailed, Message: "history could not be written", Cause: err}
+	}
+	return response, nil
 }
 
 func (s RepoService) Plan(ctx context.Context, options RepoOptions) (RepoResponse, error) {
@@ -516,6 +646,10 @@ func (s RepoService) runStep(ctx context.Context, op operation.Operation, respon
 		_, err = s.GitHub.CreateRepo(ctx, ghadapter.RepoInput{
 			ProjectRoot: response.Plan.ProjectRoot, Owner: stringInput(op, "owner"), Name: stringInput(op, "name"),
 			Visibility: stringInput(op, "visibility"), Description: stringInput(op, "description"), Homepage: stringInput(op, "homepage"),
+		})
+	case "github.repo.description.update":
+		_, err = s.GitHub.UpdateRepoDescription(ctx, ghadapter.RepoInput{
+			ProjectRoot: response.Plan.ProjectRoot, Owner: stringInput(op, "owner"), Name: stringInput(op, "name"), Description: stringInput(op, "description"),
 		})
 	case "git.remote.configure":
 		if len(response.Git.RemoteURLs) > 0 {
@@ -1073,6 +1207,8 @@ func recoveryHint(capability string) string {
 		return "Fix the authenticated Git transport. If the initial commit repair is already clean, rerun dvz repo create without --repair-unpushed-initial."
 	case "github.repo.create":
 		return "Fix GitHub authentication or repository name, then rerun the same dvz repo create command."
+	case "github.repo.description.update":
+		return "Inspect the repository description on GitHub, then rerun the same dvz repo set-description command; Devtize will plan from the observed value."
 	case "git.remote.configure":
 		return "Inspect the existing remote and rerun only after the target repository URL is the expected one."
 	case "git.branch.push":

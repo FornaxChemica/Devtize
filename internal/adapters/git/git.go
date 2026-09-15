@@ -96,6 +96,13 @@ type InspectRemoteBranchInput struct {
 	Branch      string
 }
 
+type ChangeSet struct {
+	Staged    []string `json:"staged,omitempty"`
+	Unstaged  []string `json:"unstaged,omitempty"`
+	Untracked []string `json:"untracked,omitempty"`
+	Ignored   []string `json:"ignored,omitempty"`
+}
+
 func (a Adapter) InspectRepo(ctx context.Context, input InspectRepoInput) (InspectRepoResult, error) {
 	result := InspectRepoResult{WorkingTreeStatus: "unknown"}
 	if _, err := a.run(ctx, input.ProjectRoot, "rev-parse", "--is-inside-work-tree"); err != nil {
@@ -233,6 +240,39 @@ func (a Adapter) ForcePushWithLease(ctx context.Context, input ForcePushWithLeas
 	lease := fmt.Sprintf("--force-with-lease=refs/heads/%s:%s", input.Branch, input.ExpectedCommit)
 	_, err := a.run(ctx, input.ProjectRoot, "push", lease, input.RemoteName, input.Branch)
 	return err
+}
+
+func (a Adapter) InspectChanges(ctx context.Context, projectRoot string) (ChangeSet, error) {
+	commands := []struct {
+		args   []string
+		assign func([]string)
+	}{
+		{args: []string{"diff", "--cached", "--name-only", "-z", "--"}},
+		{args: []string{"diff", "--name-only", "-z", "--"}},
+		{args: []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}},
+		{args: []string{"ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--"}},
+	}
+	var changes ChangeSet
+	commands[0].assign = func(paths []string) { changes.Staged = paths }
+	commands[1].assign = func(paths []string) { changes.Unstaged = paths }
+	commands[2].assign = func(paths []string) { changes.Untracked = paths }
+	commands[3].assign = func(paths []string) { changes.Ignored = paths }
+	for _, command := range commands {
+		result, err := a.run(ctx, projectRoot, command.args...)
+		if err != nil {
+			return ChangeSet{}, err
+		}
+		command.assign(nulFields(result.Stdout))
+	}
+	return changes, nil
+}
+
+func (a Adapter) InspectHeadMessage(ctx context.Context, projectRoot string) (string, error) {
+	result, err := a.run(ctx, projectRoot, "log", "-1", "--format=%B")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(result.Stdout, "\r\n"), nil
 }
 
 func (a Adapter) run(ctx context.Context, dir string, args ...string) (devprocess.CommandResult, error) {

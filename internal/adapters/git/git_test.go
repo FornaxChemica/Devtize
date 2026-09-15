@@ -157,6 +157,42 @@ func TestInspectRemoteBranchUsesExactRef(t *testing.T) {
 	}
 }
 
+func TestInspectChangesUsesNULTerminatedReadCommands(t *testing.T) {
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: "a b.txt\x00semi;colon\x00"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	changes, err := adapter.InspectChanges(context.Background(), "/tmp/project")
+	if err != nil {
+		t.Fatalf("inspect changes: %v", err)
+	}
+	wantArgs := [][]string{
+		{"diff", "--cached", "--name-only", "-z", "--"},
+		{"diff", "--name-only", "-z", "--"},
+		{"ls-files", "--others", "--exclude-standard", "-z", "--"},
+		{"ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--"},
+	}
+	for i, want := range wantArgs {
+		if !reflect.DeepEqual(runner.specs[i].Args, want) {
+			t.Fatalf("call %d args = %#v, want %#v", i, runner.specs[i].Args, want)
+		}
+	}
+	if !reflect.DeepEqual(changes.Staged, []string{"a b.txt", "semi;colon"}) || !reflect.DeepEqual(changes.Ignored, changes.Staged) {
+		t.Fatalf("changes = %#v", changes)
+	}
+}
+
+func TestInspectHeadMessageUsesExactFormat(t *testing.T) {
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: "feat(cli): add commit workflow\n"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	message, err := adapter.InspectHeadMessage(context.Background(), "/tmp/project")
+	if err != nil || message != "feat(cli): add commit workflow" {
+		t.Fatalf("message=%q err=%v", message, err)
+	}
+	want := []string{"log", "-1", "--format=%B"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+}
+
 func TestInitUsesInitialBranchArgumentArray(t *testing.T) {
 	runner := &fakeRunner{}
 	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}

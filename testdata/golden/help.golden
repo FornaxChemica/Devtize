@@ -4,6 +4,7 @@ Usage:
   dvz [command]
 
 Available Commands:
+  commit      Create a verified commit from disclosed changed paths
   doctor      Inspect local Devtize readiness without making changes
   find        Find reviewed command knowledge without executing it
   help        Help about any command

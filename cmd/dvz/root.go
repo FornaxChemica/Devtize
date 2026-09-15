@@ -100,9 +100,47 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	findService := app.FindService{Search: search.New(catalog.Commands())}
 	root.AddCommand(findCommand(deps, options, findService, stdout))
 	root.AddCommand(doctorCommand(deps, options, catalog.Len(), stdout))
+	root.AddCommand(commitCommand(deps, options, stdout))
 	root.AddCommand(repoCommand(deps, options, stdout))
 	root.AddCommand(versionCommand(options, stdout))
 	return root, options, nil
+}
+
+func commitCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
+	options := app.CommitOptions{Conventional: true}
+	command := &cobra.Command{
+		Use: "commit [paths...]", Short: "Create a verified commit from disclosed changed paths",
+		RunE: func(command *cobra.Command, paths []string) error {
+			options.Paths = paths
+			loaded, err := loadConfig(deps, rootOptions)
+			if err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			service := commitService(deps, loaded.Config, stdout)
+			response, err := service.Plan(command.Context(), options)
+			if err != nil {
+				return err
+			}
+			if !rootOptions.jsonOutput && !options.PlanJSON {
+				renderCommitPlan(stdout, response)
+			}
+			response, err = service.ExecutePlanned(command.Context(), options, command.InOrStdin(), response)
+			if rootOptions.jsonOutput || options.PlanJSON {
+				if options.PlanJSON {
+					return writeJSON(stdout, response.Plan)
+				}
+				_ = writeJSON(stdout, response)
+			} else if response.Result.Status != "" {
+				renderRepoResult(stdout, response.Result)
+			}
+			return err
+		},
+	}
+	command.Flags().StringVarP(&options.Message, "message", "m", "", "commit message")
+	command.Flags().BoolVar(&options.Conventional, "conventional", true, "require Conventional Commit syntax")
+	command.Flags().BoolVar(&options.DryRun, "dry-run", false, "render and validate the plan without mutation")
+	command.Flags().BoolVar(&options.PlanJSON, "plan-json", false, "print versioned plan JSON and exit before confirmation")
+	return command
 }
 
 func versionCommand(options *rootOptions, stdout io.Writer) *cobra.Command {
@@ -122,6 +160,7 @@ func versionCommand(options *rootOptions, stdout io.Writer) *cobra.Command {
 func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cobra.Command {
 	var repoOptions app.RepoOptions
 	var redactOptions app.RedactInitialOptions
+	var descriptionOptions app.RepoDescriptionOptions
 	repo := &cobra.Command{Use: "repo", Short: "Plan and run the Phase B repository self-hosting workflow", Args: cobra.NoArgs}
 	addRepoFlags := func(command *cobra.Command) {
 		command.Flags().StringVar(&repoOptions.Name, "name", "", "GitHub repository name")
@@ -245,7 +284,39 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 	redact.Flags().StringVar(&redactOptions.Remote, "remote", "origin", "Git remote name")
 	redact.Flags().BoolVar(&redactOptions.DryRun, "dry-run", false, "render and validate the plan without mutations")
 	redact.Flags().BoolVar(&redactOptions.PlanJSON, "plan-json", false, "print versioned plan JSON and exit before confirmation")
-	repo.AddCommand(create, plan, status, redact)
+	setDescription := &cobra.Command{
+		Use: "set-description", Short: "Set or verify the GitHub repository description", Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			loaded, err := loadConfig(deps, options)
+			if err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			service := repoService(deps, loaded.Config, stdout)
+			response, err := service.PlanDescription(command.Context(), descriptionOptions)
+			if err != nil {
+				return err
+			}
+			if !options.jsonOutput && !descriptionOptions.PlanJSON {
+				renderRepoDescriptionPlan(stdout, response)
+			}
+			response, err = service.ExecuteDescriptionPlanned(command.Context(), descriptionOptions, command.InOrStdin(), response)
+			if options.jsonOutput || descriptionOptions.PlanJSON {
+				if descriptionOptions.PlanJSON {
+					return writeJSON(stdout, response.Plan)
+				}
+				_ = writeJSON(stdout, response)
+			} else if response.Result.Status != "" {
+				renderRepoResult(stdout, response.Result)
+			}
+			return err
+		},
+	}
+	setDescription.Flags().StringVar(&descriptionOptions.Owner, "owner", "", "GitHub owner or organization")
+	setDescription.Flags().StringVar(&descriptionOptions.Name, "name", "", "GitHub repository name")
+	setDescription.Flags().StringVar(&descriptionOptions.Description, "description", "", "new GitHub repository description")
+	setDescription.Flags().BoolVar(&descriptionOptions.DryRun, "dry-run", false, "render and validate the plan without mutation")
+	setDescription.Flags().BoolVar(&descriptionOptions.PlanJSON, "plan-json", false, "print versioned plan JSON and exit before confirmation")
+	repo.AddCommand(create, plan, status, redact, setDescription)
 	return repo
 }
 
@@ -256,6 +327,15 @@ func repoService(deps dependencies, cfg config.Config, output io.Writer) app.Rep
 	}
 	historyPath := filepath.Join(userConfigDir, "devtize", "history.jsonl")
 	return app.RepoService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
+}
+
+func commitService(deps dependencies, cfg config.Config, output io.Writer) app.CommitService {
+	userConfigDir, err := deps.userConfigDir()
+	if err != nil || userConfigDir == "" {
+		userConfigDir = "."
+	}
+	historyPath := filepath.Join(userConfigDir, "devtize", "history.jsonl")
+	return app.CommitService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
 }
 
 func findCommand(deps dependencies, options *rootOptions, service app.FindService, stdout io.Writer) *cobra.Command {
@@ -418,6 +498,49 @@ func renderRepoPlan(writer io.Writer, response app.RepoResponse) {
 		renderPaths(writer, response.Selection.UntrackPaths)
 	}
 	for _, warning := range response.Warnings {
+		fmt.Fprintf(writer, "warning: %s\n", warning)
+	}
+	fmt.Fprintln(writer, "operations:")
+	for _, op := range response.Plan.Operations {
+		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
+		for _, effect := range op.Effects {
+			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
+		}
+	}
+}
+
+func renderRepoDescriptionPlan(writer io.Writer, response app.RepoDescriptionResponse) {
+	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
+	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
+	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
+	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
+	fmt.Fprintf(writer, "repository: %s\n", response.GitHubRepo.NameWithOwner)
+	fmt.Fprintf(writer, "current description: %s\n", response.GitHubRepo.Description)
+	if len(response.Plan.Operations) == 0 {
+		fmt.Fprintln(writer, "operations: none (description already matches)")
+		return
+	}
+	fmt.Fprintf(writer, "new description: %s\n", response.Plan.Operations[0].Inputs["description"])
+	fmt.Fprintln(writer, "operations:")
+	for _, op := range response.Plan.Operations {
+		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
+		for _, effect := range op.Effects {
+			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
+		}
+	}
+}
+
+func renderCommitPlan(writer io.Writer, response app.CommitResponse) {
+	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
+	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
+	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
+	fmt.Fprintf(writer, "branch: %s\n", response.Git.HeadBranch)
+	fmt.Fprintf(writer, "HEAD: %s\n", response.Git.HeadCommit)
+	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
+	fmt.Fprintf(writer, "message: %s\n", response.Plan.Operations[1].Inputs["message"])
+	fmt.Fprintf(writer, "selected files (%s):\n", response.Selection.Mode)
+	renderPaths(writer, response.Selection.Paths)
+	for _, warning := range response.Selection.Warnings {
 		fmt.Fprintf(writer, "warning: %s\n", warning)
 	}
 	fmt.Fprintln(writer, "operations:")

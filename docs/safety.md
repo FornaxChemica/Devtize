@@ -1,6 +1,6 @@
 # Safety And Threat Model
 
-Phase B keeps Phase A read-only behavior for `dvz find` and `dvz doctor`, and adds one mutation workflow: `dvz repo create`. `find` searches in-memory built-in knowledge and has no process runner dependency. `doctor` reads bounded configuration and project evidence, then runs only fixed version probes. `repo plan` and `repo create --dry-run` inspect state and render a typed plan without calling mutation adapters.
+Phase C keeps the existing read-only and repository behavior and adds the focused `dvz commit` mutation workflow. `find` searches in-memory built-in knowledge and has no process runner dependency. `doctor` reads bounded configuration and project evidence, then runs only fixed version probes. Repository and commit dry-runs inspect state and render typed plans without calling mutation adapters.
 
 ## Process Boundary
 
@@ -21,6 +21,8 @@ The sole Phase B destructive exception is `--repair-unpushed-initial`. It may am
 The maintainer-authorized `repo redact-initial <path>` remediation is the only published-history rewrite. It requires one synchronized commit, a tracked local file already covered by `.gitignore`, content digests for every staged file, a live remote SHA matching the plan, and an exact-SHA `--force-with-lease`. It preserves the local file and commit message. Separate `redact` and `force-update` responses bind both destructive boundaries to the displayed plan; there is no `--yes` bypass or plain-force adapter.
 
 Dry-run performs planning and validation only. Tests assert zero mutation adapter calls. Normal tests use temporary repositories, fake process runners, local bare repositories, or fake `gh`; CI must not create real GitHub repositories.
+
+`dvz commit` refuses a detached branch, existing staged content, ignored paths, unchanged paths, traversal, invalid messages, stale `HEAD`, or changed selected-file content. It requires the exact response `commit` against the rendered plan digest. If commit creation fails after staging, Devtize leaves the disclosed paths staged, records partial completion, and tells the user to inspect the index; it never guesses a destructive cleanup.
 
 Idempotency is based on live postcondition checks, not history alone. Devtize may skip satisfied init, staging, commit, repository creation, remote configuration, or push steps only after current Git/GitHub state verifies the postcondition. Unexpected origins, detached HEAD, incompatible remote repositories, empty selections, missing tools, and unauthenticated `gh` stop with actionable errors.
 

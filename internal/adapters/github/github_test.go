@@ -48,9 +48,25 @@ func TestInspectRepoParsesJSON(t *testing.T) {
 	if !result.Exists || result.Visibility != "public" || result.SSHURL == "" || result.DefaultBranch != "main" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	want := []string{"repo", "view", "OWNER/repo", "--json", "nameWithOwner,visibility,url,sshUrl,defaultBranchRef"}
+	want := []string{"repo", "view", "OWNER/repo", "--json", "nameWithOwner,visibility,description,url,sshUrl,defaultBranchRef"}
 	if !reflect.DeepEqual(runner.specs[0].Args, want) {
 		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+}
+
+func TestUpdateRepoDescriptionUsesExactLiteralArgv(t *testing.T) {
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: `{"nameWithOwner":"OWNER/repo","visibility":"PUBLIC","description":"new; $(unsafe)","url":"https://github.com/OWNER/repo"}`}}
+	adapter := Adapter{Runner: runner, Executable: "gh", Timeout: time.Second}
+	result, err := adapter.UpdateRepoDescription(context.Background(), RepoInput{ProjectRoot: "/tmp/project", Owner: "OWNER", Name: "repo", Description: "new; $(unsafe)"})
+	if err != nil {
+		t.Fatalf("update description: %v", err)
+	}
+	want := []string{"repo", "edit", "OWNER/repo", "--description", "new; $(unsafe)"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+	if result.Description != "new; $(unsafe)" {
+		t.Fatalf("description = %q", result.Description)
 	}
 }
 
