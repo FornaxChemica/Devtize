@@ -8,6 +8,7 @@ Devtize is an open-source, local-first developer command layer written in Go. Th
 - `dvz doctor` checks configuration, project evidence, Git, GitHub CLI, and the built-in registry without making changes.
 - `dvz find <intent>` searches reviewed Git knowledge offline and never executes a result.
 - `dvz commit` creates a Conventional Commit from explicitly disclosed changed paths.
+- `dvz ship` pushes reviewed commits after live fast-forward and stale-plan checks.
 - `dvz repo plan` renders the self-hosting repository plan without mutation.
 - `dvz repo create` initializes and publishes a repository through reviewed Git and `gh` adapters after confirmation.
 - `dvz repo set-description` safely updates existing GitHub repository metadata through a digest-bound plan.
@@ -41,6 +42,7 @@ go build -o dvz ./cmd/dvz
 ./dvz doctor
 ./dvz find initialize git repository
 ./dvz commit README.md --message "docs: update readme" --dry-run
+./dvz ship --dry-run
 ./dvz repo plan --owner OWNER --name Devtize --message "Initial commit"
 ./dvz repo set-description --owner OWNER --name Devtize --description "One universal command layer"
 ./dvz --json find show working tree changes
@@ -89,6 +91,8 @@ dvz repo redact-initial MASTER_IDE_PROMPT.md
 
 `dvz commit [paths...] --message <message>` is the first Phase C daily workflow. It requires Conventional Commit syntax by default, a clean index, an attached branch, exact changed paths, stable file digests, and the digest-bound confirmation word `commit`. With no paths it discloses all current non-ignored changes. `--conventional=false` permits another explicit single-line message. Dry-run and plan JSON never stage or commit.
 
+The first `dvz ship` slice pushes commits that already exist on the current branch. It verifies the configured upstream, live remote SHA, fast-forward ancestry, exact outgoing commits, remote URL, and excluded dirty working paths before requiring the digest-bound confirmation word `push`. It never stages, commits, fetches, rebases, or force-pushes. A rerun verifies the live remote and safely reports no operations when it already matches local `HEAD`.
+
 ## Support Matrix
 
 | Provider or area | Level | Notes |
@@ -97,6 +101,7 @@ dvz repo redact-initial MASTER_IDE_PROMPT.md
 | Git commands | discoverable | Twelve reviewed built-in entries |
 | Git self-hosting capabilities | workflow-ready | Init, inspect, stage, commit, remote verify/add, push through `dvz repo create` |
 | Daily Git commit | workflow-ready | Explicit changed-path selection and Conventional Commit validation through `dvz commit` |
+| Daily Git ship | executable | Verified push-only first slice through `dvz ship`; checks, commit composition, and PR creation remain planned |
 | GitHub CLI (`gh`) | workflow-ready | Auth preflight, repository creation, and guarded description updates |
 | Go projects | detected | `go.mod` evidence |
 | JavaScript projects | detected | Metadata and recognized lockfile evidence |

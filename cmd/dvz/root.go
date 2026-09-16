@@ -102,8 +102,44 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	root.AddCommand(doctorCommand(deps, options, catalog.Len(), stdout))
 	root.AddCommand(commitCommand(deps, options, stdout))
 	root.AddCommand(repoCommand(deps, options, stdout))
+	root.AddCommand(shipCommand(deps, options, stdout))
 	root.AddCommand(versionCommand(options, stdout))
 	return root, options, nil
+}
+
+func shipCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
+	var options app.ShipOptions
+	command := &cobra.Command{
+		Use: "ship", Short: "Push reviewed local commits without force", Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			loaded, err := loadConfig(deps, rootOptions)
+			if err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			service := shipService(deps, loaded.Config, stdout)
+			response, err := service.Plan(command.Context(), options)
+			if err != nil {
+				return err
+			}
+			if !rootOptions.jsonOutput && !options.PlanJSON {
+				renderShipPlan(stdout, response)
+			}
+			response, err = service.ExecutePlanned(command.Context(), options, command.InOrStdin(), response)
+			if rootOptions.jsonOutput || options.PlanJSON {
+				if options.PlanJSON {
+					return writeJSON(stdout, response.Plan)
+				}
+				_ = writeJSON(stdout, response)
+			} else if response.Result.Status != "" {
+				renderRepoResult(stdout, response.Result)
+			}
+			return err
+		},
+	}
+	command.Flags().StringVar(&options.Remote, "remote", "origin", "Git remote name")
+	command.Flags().BoolVar(&options.DryRun, "dry-run", false, "render and validate the plan without mutation")
+	command.Flags().BoolVar(&options.PlanJSON, "plan-json", false, "print versioned plan JSON and exit before confirmation")
+	return command
 }
 
 func commitCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
@@ -338,6 +374,15 @@ func commitService(deps dependencies, cfg config.Config, output io.Writer) app.C
 	return app.CommitService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
 }
 
+func shipService(deps dependencies, cfg config.Config, output io.Writer) app.ShipService {
+	userConfigDir, err := deps.userConfigDir()
+	if err != nil || userConfigDir == "" {
+		userConfigDir = "."
+	}
+	historyPath := filepath.Join(userConfigDir, "devtize", "history.jsonl")
+	return app.ShipService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
+}
+
 func findCommand(deps dependencies, options *rootOptions, service app.FindService, stdout io.Writer) *cobra.Command {
 	return &cobra.Command{
 		Use: "find <intent>", Short: "Find reviewed command knowledge without executing it", Args: cobra.MinimumNArgs(1),
@@ -542,6 +587,46 @@ func renderCommitPlan(writer io.Writer, response app.CommitResponse) {
 	renderPaths(writer, response.Selection.Paths)
 	for _, warning := range response.Selection.Warnings {
 		fmt.Fprintf(writer, "warning: %s\n", warning)
+	}
+	fmt.Fprintln(writer, "operations:")
+	for _, op := range response.Plan.Operations {
+		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
+		for _, effect := range op.Effects {
+			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
+		}
+	}
+}
+
+func renderShipPlan(writer io.Writer, response app.ShipResponse) {
+	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
+	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
+	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
+	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
+	fmt.Fprintf(writer, "remote: %s (%s)\n", response.RemoteName, response.RemoteURL)
+	fmt.Fprintf(writer, "branch: %s\n", response.Git.HeadBranch)
+	fmt.Fprintf(writer, "live remote: %s\n", response.RemoteCommit)
+	fmt.Fprintf(writer, "local HEAD: %s\n", response.Git.HeadCommit)
+	if len(response.Commits) == 0 {
+		fmt.Fprintln(writer, "outgoing commits: none")
+	} else {
+		fmt.Fprintf(writer, "outgoing commits (%d):\n", len(response.Commits))
+		for _, commit := range response.Commits {
+			sha := commit.SHA
+			if len(sha) > 12 {
+				sha = sha[:12]
+			}
+			fmt.Fprintf(writer, "  - %s %s\n", sha, commit.Subject)
+		}
+	}
+	if len(response.ExcludedPaths) == 0 {
+		fmt.Fprintln(writer, "excluded working changes: none")
+	} else {
+		fmt.Fprintln(writer, "excluded working changes:")
+		renderPaths(writer, response.ExcludedPaths)
+	}
+	if len(response.Plan.Operations) == 0 {
+		fmt.Fprintln(writer, "operations: none (remote already matches local HEAD)")
+		return
 	}
 	fmt.Fprintln(writer, "operations:")
 	for _, op := range response.Plan.Operations {

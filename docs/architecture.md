@@ -24,3 +24,5 @@ Mutations enter through application services, immutable typed plans, safety poli
 The one-file `repo redact-initial` remediation uses the same application, plan, adapter, confirmation, history, and postcondition path. Its force-with-lease adapter requires an explicit expected remote SHA and is not available to discovery, passthrough, or the normal repository workflow.
 
 `dvz commit` plans from an attached branch and clean index, discloses exact changed paths and content digests, revalidates them after confirmation, stages only those paths, and verifies the new `HEAD` and message. Existing staged content is rejected so an undisclosed path cannot enter the commit.
+
+The first `dvz ship` slice is a separate `ShipService`. It reads local and live remote state, proves fast-forward ancestry, binds the exact outgoing commit list and excluded dirty paths into the plan, and delegates one reviewed non-force push to the Git adapter. It does not compose commit creation or checks yet.

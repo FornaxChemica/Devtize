@@ -4,7 +4,7 @@ Phase C keeps the existing read-only and repository behavior and adds the focuse
 
 ## Process Boundary
 
-All subprocesses use an executable and argument slice, an explicit working directory, timeout, disabled stdin, a narrow environment, bounded output capture, and redaction values. The runner uses `exec.CommandContext` directly. Shell interpreters and command strings are prohibited. Git staging uses `git add -- <path>...`; push uses `git push --set-upstream` and never force options. Errors do not reproduce full command lines or environment values.
+All subprocesses use an executable and argument slice, an explicit working directory, timeout, disabled stdin, a narrow environment, bounded output capture, and redaction values. The runner uses `exec.CommandContext` directly. Shell interpreters and command strings are prohibited. Git staging uses `git add -- <path>...`; initial push uses `git push --set-upstream`, and daily ship uses a full source/destination branch refspec. Neither path exposes force options. Errors do not reproduce full command lines or environment values.
 
 ## Sensitive Data
 
@@ -23,6 +23,8 @@ The maintainer-authorized `repo redact-initial <path>` remediation is the only p
 Dry-run performs planning and validation only. Tests assert zero mutation adapter calls. Normal tests use temporary repositories, fake process runners, local bare repositories, or fake `gh`; CI must not create real GitHub repositories.
 
 `dvz commit` refuses a detached branch, existing staged content, ignored paths, unchanged paths, traversal, invalid messages, stale `HEAD`, or changed selected-file content. It requires the exact response `commit` against the rendered plan digest. If commit creation fails after staging, Devtize leaves the disclosed paths staged, records partial completion, and tells the user to inspect the index; it never guesses a destructive cleanup.
+
+The push-only `dvz ship` slice requires an attached branch with an exact configured upstream and one remote URL. It compares the live remote SHA to the local remote-tracking SHA, proves that SHA is an ancestor of local `HEAD`, discloses every outgoing commit and dirty path excluded from the push, and rechecks all of that around the digest-bound `push` confirmation. The adapter uses a full branch refspec and has no force option. A process failure is treated as an uncertain remote outcome and recovered through a fresh live inspection.
 
 Idempotency is based on live postcondition checks, not history alone. Devtize may skip satisfied init, staging, commit, repository creation, remote configuration, or push steps only after current Git/GitHub state verifies the postcondition. Unexpected origins, detached HEAD, incompatible remote repositories, empty selections, missing tools, and unauthenticated `gh` stop with actionable errors.
 

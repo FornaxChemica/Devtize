@@ -96,6 +96,23 @@ type InspectRemoteBranchInput struct {
 	Branch      string
 }
 
+type PushExistingBranchInput struct {
+	ProjectRoot string
+	RemoteName  string
+	Branch      string
+}
+
+type InspectOutgoingCommitsInput struct {
+	ProjectRoot string
+	BaseCommit  string
+	HeadCommit  string
+}
+
+type CommitSummary struct {
+	SHA     string `json:"sha"`
+	Subject string `json:"subject"`
+}
+
 type ChangeSet struct {
 	Staged    []string `json:"staged,omitempty"`
 	Unstaged  []string `json:"unstaged,omitempty"`
@@ -221,7 +238,19 @@ func (a Adapter) PushBranch(ctx context.Context, input PushInput) error {
 	return err
 }
 
+func (a Adapter) PushExistingBranch(ctx context.Context, input PushExistingBranchInput) error {
+	if !validRemoteOrBranch(input.RemoteName) || !validRemoteOrBranch(input.Branch) {
+		return errors.New("remote and branch must be safe Git names")
+	}
+	refspec := "refs/heads/" + input.Branch + ":refs/heads/" + input.Branch
+	_, err := a.run(ctx, input.ProjectRoot, "push", input.RemoteName, refspec)
+	return err
+}
+
 func (a Adapter) InspectRemoteBranch(ctx context.Context, input InspectRemoteBranchInput) (string, error) {
+	if !validRemoteOrBranch(input.RemoteName) || !validRemoteOrBranch(input.Branch) {
+		return "", errors.New("remote and branch must be safe Git names")
+	}
 	result, err := a.run(ctx, input.ProjectRoot, "ls-remote", "--heads", input.RemoteName, "refs/heads/"+input.Branch)
 	if err != nil {
 		return "", err
@@ -231,6 +260,46 @@ func (a Adapter) InspectRemoteBranch(ctx context.Context, input InspectRemoteBra
 		return "", errors.New("remote branch was not found")
 	}
 	return fields[0], nil
+}
+
+func (a Adapter) IsAncestor(ctx context.Context, projectRoot, ancestor, descendant string) (bool, error) {
+	if !validCommitID(ancestor) || !validCommitID(descendant) {
+		return false, errors.New("ancestor checks require full commit IDs")
+	}
+	_, err := a.run(ctx, projectRoot, "merge-base", "--is-ancestor", ancestor, descendant)
+	if err == nil {
+		return true, nil
+	}
+	var runErr *devprocess.RunError
+	if errors.As(err, &runErr) && runErr.Kind == devprocess.ErrorExit && runErr.ExitCode == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+func (a Adapter) InspectOutgoingCommits(ctx context.Context, input InspectOutgoingCommitsInput) ([]CommitSummary, error) {
+	if !validCommitID(input.BaseCommit) || !validCommitID(input.HeadCommit) {
+		return nil, errors.New("outgoing commit inspection requires full commit IDs")
+	}
+	commitRange := input.BaseCommit + ".." + input.HeadCommit
+	result, err := a.run(ctx, input.ProjectRoot, "log", "--reverse", "--format=%H%x00%s%x00", commitRange, "--")
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Split(result.Stdout, "\x00")
+	var commits []CommitSummary
+	for i := 0; i+1 < len(fields); i += 2 {
+		sha := strings.TrimSpace(fields[i])
+		subject := strings.TrimRight(fields[i+1], "\r\n")
+		if sha == "" {
+			continue
+		}
+		if !validCommitID(sha) {
+			return nil, errors.New("git returned an invalid outgoing commit ID")
+		}
+		commits = append(commits, CommitSummary{SHA: sha, Subject: subject})
+	}
+	return commits, nil
 }
 
 func (a Adapter) ForcePushWithLease(ctx context.Context, input ForcePushWithLeaseInput) error {
@@ -336,6 +405,35 @@ func nulFields(output string) []string {
 		}
 	}
 	return fields
+}
+
+func validCommitID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') && (char < 'A' || char > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func validRemoteOrBranch(value string) bool {
+	if value == "" || strings.HasPrefix(value, "-") || strings.Contains(value, "..") || strings.Contains(value, "@{") || strings.ContainsAny(value, " ~^:?*[\\") || strings.HasSuffix(value, ".") || strings.HasSuffix(value, ".lock") || strings.Contains(value, "//") {
+		return false
+	}
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || strings.HasPrefix(part, ".") {
+			return false
+		}
+	}
+	return true
 }
 
 func IsMissingRemote(err error) bool {

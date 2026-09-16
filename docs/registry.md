@@ -26,4 +26,6 @@ These capabilities are available only through the typed `dvz repo` application p
 
 Phase C reuses the reviewed `git.index.stage` and `git.commit.create` capabilities through `dvz commit`. That path requires a clean index, exact changed-path disclosure, content digests, Conventional Commit validation by default, and postcondition verification. It does not make command knowledge executable.
 
+The first `dvz ship` slice reuses `git.branch.push` only after live remote inspection, fast-forward ancestry verification, exact outgoing-commit disclosure, and remote-write confirmation. Its adapter uses `git push <remote> refs/heads/<branch>:refs/heads/<branch>` and cannot request force.
+
 The corpus is available offline. A future `dvz sync` may supplement it with bounded, version-matched CLI help, but introspected help will remain quarantined discovery data with provenance and cannot create trusted mutation capabilities.

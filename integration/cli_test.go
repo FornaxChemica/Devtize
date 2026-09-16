@@ -123,6 +123,74 @@ func TestBuiltBinaryCommitDryRunAndExecutionInTemporaryRepository(t *testing.T) 
 	}
 }
 
+func TestBuiltBinaryShipDryRunAndPushToLocalBareRemote(t *testing.T) {
+	root := filepath.Clean("..")
+	binary := filepath.Join(t.TempDir(), "dvz")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dvz")
+	build.Dir = root
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dvz: %v\n%s", err, output)
+	}
+
+	repo := t.TempDir()
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", bare)
+	runGit(t, repo, "init", "--initial-branch", "main")
+	runGit(t, repo, "config", "user.name", "Devtize Test")
+	runGit(t, repo, "config", "user.email", "devtize-test@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "--", "README.md")
+	runGit(t, repo, "commit", "--message", "chore: initial fixture")
+	runGit(t, repo, "remote", "add", "origin", bare)
+	runGit(t, repo, "push", "--set-upstream", "origin", "main")
+	remoteBefore := strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main"))
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("next\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "--", "README.md")
+	runGit(t, repo, "commit", "--message", "feat: next fixture")
+	head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	if err := os.MkdirAll(filepath.Join(repo, "docs", "plans"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "docs", "plans", "phase-c.md"), []byte("excluded\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	configHome := t.TempDir()
+	dryRun := exec.Command(binary, "ship", "--dry-run")
+	dryRun.Dir = repo
+	dryRun.Env = append(os.Environ(), "HOME="+configHome, "XDG_CONFIG_HOME="+configHome, "NO_COLOR=1")
+	output, err := dryRun.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "git.branch.push [remote_write]") || !strings.Contains(string(output), "docs/plans/phase-c.md") {
+		t.Fatalf("ship dry-run: %v\n%s", err, output)
+	}
+	if remote := strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main")); remote != remoteBefore {
+		t.Fatalf("dry-run changed remote from %s to %s", remoteBefore, remote)
+	}
+
+	ship := exec.Command(binary, "ship")
+	ship.Dir = repo
+	ship.Env = append(os.Environ(), "HOME="+configHome, "XDG_CONFIG_HOME="+configHome, "NO_COLOR=1")
+	ship.Stdin = strings.NewReader("push\n")
+	output, err = ship.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "result: succeeded") {
+		t.Fatalf("ship: %v\n%s", err, output)
+	}
+	if remote := strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main")); remote != head {
+		t.Fatalf("remote = %s, want %s", remote, head)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "docs", "plans", "phase-c.md")); err != nil {
+		t.Fatalf("excluded dirty path was lost: %v", err)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", args...)

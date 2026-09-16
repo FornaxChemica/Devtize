@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,34 @@ func TestPushNeverUsesForce(t *testing.T) {
 	want := []string{"push", "--set-upstream", "origin", "main"}
 	if !reflect.DeepEqual(runner.specs[0].Args, want) {
 		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+}
+
+func TestPushExistingBranchUsesFullRefspecAndNeverForce(t *testing.T) {
+	runner := &fakeRunner{}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	if err := adapter.PushExistingBranch(context.Background(), PushExistingBranchInput{ProjectRoot: "/tmp/project", RemoteName: "origin", Branch: "feature/safe"}); err != nil {
+		t.Fatalf("push existing branch: %v", err)
+	}
+	want := []string{"push", "origin", "refs/heads/feature/safe:refs/heads/feature/safe"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+	for _, arg := range runner.specs[0].Args {
+		if strings.Contains(arg, "force") {
+			t.Fatalf("push used force: %#v", runner.specs[0].Args)
+		}
+	}
+}
+
+func TestPushExistingBranchRejectsOptionLikeNamesBeforeRunner(t *testing.T) {
+	for _, branch := range []string{"--force", "main\nmalicious"} {
+		runner := &fakeRunner{}
+		adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+		err := adapter.PushExistingBranch(context.Background(), PushExistingBranchInput{ProjectRoot: "/tmp/project", RemoteName: "origin", Branch: branch})
+		if err == nil || len(runner.specs) != 0 {
+			t.Fatalf("unsafe branch %q reached runner: err=%v specs=%#v", branch, err, runner.specs)
+		}
 	}
 }
 
@@ -152,6 +181,39 @@ func TestInspectRemoteBranchUsesExactRef(t *testing.T) {
 		t.Fatalf("inspect remote branch: commit=%q err=%v", commit, err)
 	}
 	want := []string{"ls-remote", "--heads", "origin", "refs/heads/main"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+}
+
+func TestInspectOutgoingCommitsUsesCommitIDsAndParsesNULFields(t *testing.T) {
+	base := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: strings.Repeat("c", 40) + "\x00feat: one\x00\n" + head + "\x00fix: two\x00\n"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	commits, err := adapter.InspectOutgoingCommits(context.Background(), InspectOutgoingCommitsInput{ProjectRoot: "/tmp/project", BaseCommit: base, HeadCommit: head})
+	if err != nil {
+		t.Fatalf("inspect outgoing: %v", err)
+	}
+	wantArgs := []string{"log", "--reverse", "--format=%H%x00%s%x00", base + ".." + head, "--"}
+	if !reflect.DeepEqual(runner.specs[0].Args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, wantArgs)
+	}
+	if len(commits) != 2 || commits[1].SHA != head || commits[1].Subject != "fix: two" {
+		t.Fatalf("commits = %#v", commits)
+	}
+}
+
+func TestIsAncestorMapsOnlyExitOneToFalse(t *testing.T) {
+	base := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	runner := &fakeRunner{err: &devprocess.RunError{Kind: devprocess.ErrorExit, ExitCode: 1}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	ok, err := adapter.IsAncestor(context.Background(), "/tmp/project", base, head)
+	if err != nil || ok {
+		t.Fatalf("is ancestor = %t, err=%v", ok, err)
+	}
+	want := []string{"merge-base", "--is-ancestor", base, head}
 	if !reflect.DeepEqual(runner.specs[0].Args, want) {
 		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
 	}
