@@ -28,7 +28,7 @@ After every Phase B acceptance criterion passes, the real self-hosting milestone
 
 - Phase A acceptance criteria are complete before Phase B coding starts.
 - The canonical Phase B command is `dvz repo create`; it means “create or verify the local Git repository and matching GitHub remote for this project.”
-- The default repository name is derived from the project folder or project config and defaults to `devtize` for this repository, but the user can override it with `--name`.
+- The default repository name is derived from the project folder or project config and defaults to `Devtize` for this repository, but the user can override it with `--name`.
 - The default initial branch is config value `git.default_branch`, then `main`.
 - `gh` is the only GitHub write path in Phase B. Direct GitHub API clients are out of scope.
 - Commit message generation is optional. A deterministic `--message` path must always work without AI. If AI is still disabled after Phase A, Phase B can implement `--generate-message` as an explicit `AI_UNAVAILABLE` result until the AI interface exists.
@@ -295,7 +295,7 @@ Inputs:
 Adapter command:
 
 ```text
-gh repo view <owner>/<name> --json nameWithOwner,visibility,url,sshUrl,defaultBranchRef
+gh repo view <owner>/<name> --json nameWithOwner,visibility,description,url,sshUrl,defaultBranchRef
 ```
 
 Outputs:
@@ -1085,7 +1085,7 @@ Acceptance criteria:
 - Task 12 remains unchecked until the maintainer personally runs and verifies
   the final command.
 
-### 12. [ ] Maintainer-Run Self-Hosting Milestone
+### 12. [x] Maintainer-Run Self-Hosting Milestone
 
 Dependencies: task 11.1 complete.
 
@@ -1155,7 +1155,7 @@ Acceptance criteria:
 
 | Area | Required coverage |
 |---|---|
-| CLI | `repo create`, `repo plan`, `repo status`, invalid flags, non-interactive behavior, `--json`, `--plan-json`, `--dry-run`, `--yes`, declined confirmations |
+| CLI | `repo create`, `repo plan`, `repo status`, `repo set-description`, invalid flags, non-interactive behavior, `--json`, `--plan-json`, `--dry-run`, `--yes`, declined confirmations |
 | Plans | canonical operation order, stable digest, digest invalidation, text and JSON goldens, complete local/remote effect rendering |
 | Safety | local-write and remote-write policy, general destructive/privileged denial, guarded initial-repair confirmation, secret preflight, scoped `--yes`, plan-bound confirmation |
 | Git adapter | exact argv, no shell, init, inspect, explicit staging, ignored-file exclusion, recovery-only untrack/amend, commit, remote inspect/add, push without force |
@@ -1199,4 +1199,4 @@ Acceptance criteria:
 - [x] README and focused docs describe actual Phase B behavior, risk boundaries, dry-run, idempotency, rollback limits, and self-hosting procedure.
 - [x] Before the real self-hosting milestone, no one has manually run Git or GitHub mutation commands in the Devtize folder.
 - [x] An interrupted unpublished initial commit can be repaired only through the narrow, digest-confirmed `--repair-unpushed-initial` path.
-- [ ] The final real self-hosting milestone is performed by the maintainer through `dvz` commands and documented afterward in `docs/self-hosting.md` with sanitized evidence.
+- [x] The final real self-hosting milestone is performed by the maintainer through `dvz` commands and documented afterward in `docs/self-hosting.md` with sanitized evidence.
