@@ -174,13 +174,38 @@ func TestForcePushRequiresExpectedCommit(t *testing.T) {
 }
 
 func TestInspectRemoteBranchUsesExactRef(t *testing.T) {
-	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: "abc123\trefs/heads/main\n"}}
+	commitID := strings.Repeat("a", 40)
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: commitID + "\trefs/heads/main\n"}}
 	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
 	commit, err := adapter.InspectRemoteBranch(context.Background(), InspectRemoteBranchInput{ProjectRoot: "/tmp/project", RemoteName: "origin", Branch: "main"})
-	if err != nil || commit != "abc123" {
+	if err != nil || commit != commitID {
 		t.Fatalf("inspect remote branch: commit=%q err=%v", commit, err)
 	}
 	want := []string{"ls-remote", "--heads", "origin", "refs/heads/main"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
+	}
+}
+
+func TestInspectRemoteBranchStateTreatsMissingBranchAsState(t *testing.T) {
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: ""}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	state, err := adapter.InspectRemoteBranchState(context.Background(), InspectRemoteBranchInput{ProjectRoot: "/tmp/project", RemoteName: "origin", Branch: "main"})
+	if err != nil || state.Exists || state.Commit != "" {
+		t.Fatalf("state = %#v, err=%v", state, err)
+	}
+}
+
+func TestInspectTrackingRelationUsesFullCommitRange(t *testing.T) {
+	upstream := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: "2\t3\n"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	relation, err := adapter.InspectTrackingRelation(context.Background(), InspectTrackingRelationInput{ProjectRoot: "/tmp/project", UpstreamCommit: upstream, HeadCommit: head})
+	if err != nil || relation.Ahead != 3 || relation.Behind != 2 {
+		t.Fatalf("relation = %#v, err=%v", relation, err)
+	}
+	want := []string{"rev-list", "--left-right", "--count", upstream + "..." + head}
 	if !reflect.DeepEqual(runner.specs[0].Args, want) {
 		t.Fatalf("args = %#v, want %#v", runner.specs[0].Args, want)
 	}
@@ -307,5 +332,15 @@ func TestAdapterInitAndStageInTemporaryRepository(t *testing.T) {
 	}
 	if !state.IsRepository {
 		t.Fatal("expected temp directory to be a repository")
+	}
+}
+
+func TestInspectRepoPreservesMissingExecutableFailure(t *testing.T) {
+	runErr := &devprocess.RunError{Kind: devprocess.ErrorMissing, Message: "missing"}
+	runner := &fakeRunner{err: runErr}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	_, err := adapter.InspectRepo(context.Background(), InspectRepoInput{ProjectRoot: "/tmp/project"})
+	if !errors.Is(err, runErr) {
+		t.Fatalf("err=%v", err)
 	}
 }

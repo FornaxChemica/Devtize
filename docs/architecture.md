@@ -1,6 +1,6 @@
 # Architecture
 
-Phase C begins with the Phase A read-only paths, Phase B repository workflows, and one daily commit workflow:
+Phase C builds on the Phase A read-only paths and Phase B repository workflows with daily commit, push-only ship, status, and history commands:
 
 ```text
 cmd/dvz -> internal/app -> internal/search -> internal/registry -> registry/builtin
@@ -14,6 +14,8 @@ cmd/dvz -> internal/app -> internal/history
 `cmd/dvz` owns Cobra wiring, output streams, JSON encoding, and process exit codes. Application services coordinate typed requests and responses without importing Cobra. Registry entries are reviewed discovery metadata. Search is deterministic and has no process dependency. Detection owns project evidence and tool-version interpretation. `internal/process` is the only general subprocess boundary.
 
 Configuration is loaded before command behavior and is passed as typed state. Domain packages do not import Cobra. The focused `CommitService` reuses operation, history, safety, and Git adapter boundaries without introducing a generic workflow DSL. `raw`, TUI, MCP, and a broad workflow catalog remain absent.
+
+`StatusService` composes only reviewed Git reads. Local inspection and tracking relation are offline; optional live inspection uses `ls-remote` without fetching. `HistoryService` reads a bounded JSON Lines store through a narrow reader interface and exposes typed entries instead of persisted free-form maps. Neither service enters the mutation plan or confirmation path, and neither records its own read.
 
 ## Trust Boundary
 

@@ -28,4 +28,6 @@ Phase C reuses the reviewed `git.index.stage` and `git.commit.create` capabiliti
 
 The first `dvz ship` slice reuses `git.branch.push` only after live remote inspection, fast-forward ancestry verification, exact outgoing-commit disclosure, and remote-write confirmation. Its adapter uses `git push <remote> refs/heads/<branch>:refs/heads/<branch>` and cannot request force.
 
+`dvz status` uses reviewed read-only adapter methods for repository state, exact change categories, local tracking relation, and optional live branch inspection. The live check is explicit, invokes `git ls-remote --heads`, and never fetches. `dvz history` does not execute provider commands.
+
 The corpus is available offline. A future `dvz sync` may supplement it with bounded, version-matched CLI help, but introspected help will remain quarantined discovery data with provenance and cannot create trusted mutation capabilities.

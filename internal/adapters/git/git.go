@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,6 +97,22 @@ type InspectRemoteBranchInput struct {
 	Branch      string
 }
 
+type InspectTrackingRelationInput struct {
+	ProjectRoot    string
+	UpstreamCommit string
+	HeadCommit     string
+}
+
+type TrackingRelation struct {
+	Ahead  int `json:"ahead"`
+	Behind int `json:"behind"`
+}
+
+type RemoteBranchState struct {
+	Exists bool   `json:"exists"`
+	Commit string `json:"commit,omitempty"`
+}
+
 type PushExistingBranchInput struct {
 	ProjectRoot string
 	RemoteName  string
@@ -123,7 +140,11 @@ type ChangeSet struct {
 func (a Adapter) InspectRepo(ctx context.Context, input InspectRepoInput) (InspectRepoResult, error) {
 	result := InspectRepoResult{WorkingTreeStatus: "unknown"}
 	if _, err := a.run(ctx, input.ProjectRoot, "rev-parse", "--is-inside-work-tree"); err != nil {
-		return result, nil
+		var runErr *devprocess.RunError
+		if errors.As(err, &runErr) && runErr.Kind == devprocess.ErrorExit {
+			return result, nil
+		}
+		return result, err
 	}
 	result.IsRepository = true
 	if head, err := a.run(ctx, input.ProjectRoot, "rev-parse", "--verify", "HEAD"); err == nil {
@@ -248,18 +269,53 @@ func (a Adapter) PushExistingBranch(ctx context.Context, input PushExistingBranc
 }
 
 func (a Adapter) InspectRemoteBranch(ctx context.Context, input InspectRemoteBranchInput) (string, error) {
-	if !validRemoteOrBranch(input.RemoteName) || !validRemoteOrBranch(input.Branch) {
-		return "", errors.New("remote and branch must be safe Git names")
-	}
-	result, err := a.run(ctx, input.ProjectRoot, "ls-remote", "--heads", input.RemoteName, "refs/heads/"+input.Branch)
+	state, err := a.InspectRemoteBranchState(ctx, input)
 	if err != nil {
 		return "", err
 	}
-	fields := strings.Fields(result.Stdout)
-	if len(fields) < 2 || fields[1] != "refs/heads/"+input.Branch {
+	if !state.Exists {
 		return "", errors.New("remote branch was not found")
 	}
-	return fields[0], nil
+	return state.Commit, nil
+}
+
+func (a Adapter) InspectRemoteBranchState(ctx context.Context, input InspectRemoteBranchInput) (RemoteBranchState, error) {
+	if !validRemoteOrBranch(input.RemoteName) || !validRemoteOrBranch(input.Branch) {
+		return RemoteBranchState{}, errors.New("remote and branch must be safe Git names")
+	}
+	result, err := a.run(ctx, input.ProjectRoot, "ls-remote", "--heads", input.RemoteName, "refs/heads/"+input.Branch)
+	if err != nil {
+		return RemoteBranchState{}, err
+	}
+	fields := strings.Fields(result.Stdout)
+	if len(fields) == 0 {
+		return RemoteBranchState{Exists: false}, nil
+	}
+	if len(fields) != 2 || fields[1] != "refs/heads/"+input.Branch || !validCommitID(fields[0]) {
+		return RemoteBranchState{}, errors.New("git returned an invalid remote branch response")
+	}
+	return RemoteBranchState{Exists: true, Commit: fields[0]}, nil
+}
+
+func (a Adapter) InspectTrackingRelation(ctx context.Context, input InspectTrackingRelationInput) (TrackingRelation, error) {
+	if !validCommitID(input.UpstreamCommit) || !validCommitID(input.HeadCommit) {
+		return TrackingRelation{}, errors.New("tracking relation requires full commit IDs")
+	}
+	commitRange := input.UpstreamCommit + "..." + input.HeadCommit
+	result, err := a.run(ctx, input.ProjectRoot, "rev-list", "--left-right", "--count", commitRange)
+	if err != nil {
+		return TrackingRelation{}, err
+	}
+	fields := strings.Fields(result.Stdout)
+	if len(fields) != 2 {
+		return TrackingRelation{}, errors.New("git returned an invalid tracking relation")
+	}
+	behind, behindErr := strconv.Atoi(fields[0])
+	ahead, aheadErr := strconv.Atoi(fields[1])
+	if behindErr != nil || aheadErr != nil || behind < 0 || ahead < 0 {
+		return TrackingRelation{}, errors.New("git returned an invalid tracking relation")
+	}
+	return TrackingRelation{Ahead: ahead, Behind: behind}, nil
 }
 
 func (a Adapter) IsAncestor(ctx context.Context, projectRoot, ancestor, descendant string) (bool, error) {

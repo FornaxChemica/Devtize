@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,95 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestBuiltBinaryStatusAndHistoryAreReadOnly(t *testing.T) {
+	root := filepath.Clean("..")
+	binary := filepath.Join(t.TempDir(), "dvz")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dvz")
+	build.Dir = root
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dvz: %v\n%s", err, output)
+	}
+
+	repo := t.TempDir()
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", bare)
+	runGit(t, repo, "init", "--initial-branch", "main")
+	runGit(t, repo, "config", "user.name", "Devtize Test")
+	runGit(t, repo, "config", "user.email", "devtize-test@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "--", "README.md")
+	runGit(t, repo, "commit", "--message", "chore: initial fixture")
+	runGit(t, repo, "remote", "add", "origin", bare)
+	runGit(t, repo, "push", "--set-upstream", "origin", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("next\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "--", "README.md")
+	runGit(t, repo, "commit", "--message", "feat: local fixture")
+	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("working\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	headBefore := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	worktreeBefore := runGit(t, repo, "status", "--porcelain=v1")
+
+	configHome := t.TempDir()
+	environment := append(os.Environ(), "HOME="+configHome, "XDG_CONFIG_HOME="+configHome, "NO_COLOR=1")
+	status := exec.Command(binary, "--json", "status")
+	status.Dir = repo
+	status.Env = environment
+	output, err := status.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"relation": "ahead"`) || !strings.Contains(string(output), `"untracked.txt"`) || !strings.Contains(string(output), `"requested": false`) {
+		t.Fatalf("status: %v\n%s", err, output)
+	}
+	live := exec.Command(binary, "--json", "status", "--remote")
+	live.Dir = repo
+	live.Env = environment
+	output, err = live.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"relation": "local_ahead"`) {
+		t.Fatalf("live status: %v\n%s", err, output)
+	}
+	if headAfter := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")); headAfter != headBefore {
+		t.Fatalf("status changed HEAD from %s to %s", headBefore, headAfter)
+	}
+	if worktreeAfter := runGit(t, repo, "status", "--porcelain=v1"); worktreeAfter != worktreeBefore {
+		t.Fatalf("status changed working tree from %q to %q", worktreeBefore, worktreeAfter)
+	}
+
+	historyDir := filepath.Join(configHome, "devtize")
+	if err := os.MkdirAll(historyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRepo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := map[string]any{
+		"schema_version": 1, "execution_id": "exec_fixture", "plan_id": "plan_commit_fixture",
+		"plan_digest": "sha256:fixture", "project": map[string]string{"root": canonicalRepo},
+		"invocation": map[string]any{"workflow": "commit", "access_token": "must-not-appear"}, "status": "succeeded",
+	}
+	content, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(historyDir, "history.jsonl"), append(content, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	historyCommand := exec.Command(binary, "--json", "history")
+	historyCommand.Dir = repo
+	historyCommand.Env = environment
+	output, err = historyCommand.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"execution_id": "exec_fixture"`) || strings.Contains(string(output), "must-not-appear") || strings.Contains(string(output), "access_token") {
+		t.Fatalf("history: %v\n%s", err, output)
+	}
+}
 
 func TestBuiltBinaryPhaseASmoke(t *testing.T) {
 	root := filepath.Clean("..")

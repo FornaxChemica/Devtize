@@ -22,6 +22,8 @@ const (
 	CodeAIUnavailable          ErrorCode = "AI_UNAVAILABLE"
 	CodeAIOutputInvalid        ErrorCode = "AI_OUTPUT_INVALID"
 	CodeHistoryWriteFailed     ErrorCode = "HISTORY_WRITE_FAILED"
+	CodeHistoryReadFailed      ErrorCode = "HISTORY_READ_FAILED"
+	CodeHistoryInvalid         ErrorCode = "HISTORY_INVALID"
 	CodePostconditionFailed    ErrorCode = "POSTCONDITION_FAILED"
 )
 

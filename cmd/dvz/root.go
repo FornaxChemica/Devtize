@@ -101,10 +101,61 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	root.AddCommand(findCommand(deps, options, findService, stdout))
 	root.AddCommand(doctorCommand(deps, options, catalog.Len(), stdout))
 	root.AddCommand(commitCommand(deps, options, stdout))
+	root.AddCommand(statusCommand(deps, options, stdout))
+	root.AddCommand(historyCommand(deps, options, stdout))
 	root.AddCommand(repoCommand(deps, options, stdout))
 	root.AddCommand(shipCommand(deps, options, stdout))
 	root.AddCommand(versionCommand(options, stdout))
 	return root, options, nil
+}
+
+func statusCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
+	var options app.StatusOptions
+	command := &cobra.Command{
+		Use: "status", Short: "Inspect daily Git status without mutation", Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if _, err := loadConfig(deps, rootOptions); err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			response, err := statusService(deps).Run(command.Context(), options)
+			if err != nil {
+				return err
+			}
+			if rootOptions.jsonOutput {
+				return writeJSON(stdout, response)
+			}
+			renderStatus(stdout, response)
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&options.Remote, "remote", false, "verify the current branch against the live remote")
+	command.Flags().StringVar(&options.RemoteName, "remote-name", "origin", "Git remote name used for optional live verification")
+	return command
+}
+
+func historyCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
+	var options app.HistoryOptions
+	command := &cobra.Command{
+		Use: "history", Short: "Show redacted Devtize execution history", Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			loaded, err := loadConfig(deps, rootOptions)
+			if err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			response, err := historyService(deps, loaded.Config).Run(options)
+			if err != nil {
+				return err
+			}
+			if rootOptions.jsonOutput {
+				return writeJSON(stdout, response)
+			}
+			renderHistory(stdout, response)
+			return nil
+		},
+	}
+	command.Flags().IntVar(&options.Limit, "limit", 20, "maximum records to show (1-200)")
+	command.Flags().BoolVar(&options.All, "all", false, "include records from every project")
+	return command
 }
 
 func shipCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
@@ -357,30 +408,31 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 }
 
 func repoService(deps dependencies, cfg config.Config, output io.Writer) app.RepoService {
-	userConfigDir, err := deps.userConfigDir()
-	if err != nil || userConfigDir == "" {
-		userConfigDir = "."
-	}
-	historyPath := filepath.Join(userConfigDir, "devtize", "history.jsonl")
-	return app.RepoService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
+	return app.RepoService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: localHistoryPath(deps)}, Output: output}
 }
 
 func commitService(deps dependencies, cfg config.Config, output io.Writer) app.CommitService {
-	userConfigDir, err := deps.userConfigDir()
-	if err != nil || userConfigDir == "" {
-		userConfigDir = "."
-	}
-	historyPath := filepath.Join(userConfigDir, "devtize", "history.jsonl")
-	return app.CommitService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
+	return app.CommitService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: localHistoryPath(deps)}, Output: output}
 }
 
 func shipService(deps dependencies, cfg config.Config, output io.Writer) app.ShipService {
-	userConfigDir, err := deps.userConfigDir()
-	if err != nil || userConfigDir == "" {
-		userConfigDir = "."
+	return app.ShipService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: localHistoryPath(deps)}, Output: output}
+}
+
+func statusService(deps dependencies) app.StatusService {
+	return app.StatusService{WorkingDir: deps.workingDir, Runner: deps.runner}
+}
+
+func historyService(deps dependencies, cfg config.Config) app.HistoryService {
+	return app.HistoryService{WorkingDir: deps.workingDir, Config: cfg, History: history.Store{Path: localHistoryPath(deps)}}
+}
+
+func localHistoryPath(deps dependencies) string {
+	configPath, err := config.UserPath(deps.environment, deps.userConfigDir)
+	if err != nil || configPath == "" {
+		return filepath.Join(".", "devtize", "history.jsonl")
 	}
-	historyPath := filepath.Join(userConfigDir, "devtize", "history.jsonl")
-	return app.ShipService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: historyPath}, Output: output}
+	return filepath.Join(filepath.Dir(configPath), "history.jsonl")
 }
 
 func findCommand(deps dependencies, options *rootOptions, service app.FindService, stdout io.Writer) *cobra.Command {
@@ -524,8 +576,10 @@ func exitCode(err error) int {
 		return exitMissingDependency
 	case app.CodeAuthRequired:
 		return exitMissingDependency
-	case app.CodeProcessTimeout, app.CodeProcessFailed, app.CodePartialExecution, app.CodeHistoryWriteFailed, app.CodePostconditionFailed:
+	case app.CodeProcessTimeout, app.CodeProcessFailed, app.CodePartialExecution, app.CodeHistoryWriteFailed, app.CodeHistoryReadFailed, app.CodePostconditionFailed:
 		return exitProcessFailure
+	case app.CodeHistoryInvalid:
+		return exitInvalid
 	default:
 		return exitProcessFailure
 	}
@@ -703,4 +757,93 @@ func renderRepoStatus(writer io.Writer, response app.RepoResponse) {
 	} else {
 		fmt.Fprintf(writer, "origin: %s\n", strings.Join(response.Git.RemoteURLs, ", "))
 	}
+}
+
+func renderStatus(writer io.Writer, response app.StatusResponse) {
+	fmt.Fprintf(writer, "project: %s\n", response.ProjectRoot)
+	if !response.Repository.IsRepository {
+		fmt.Fprintln(writer, "repository: not initialized")
+	} else {
+		fmt.Fprintln(writer, "repository: initialized")
+		branch := response.Repository.Branch
+		if branch == "" {
+			branch = "(detached or unborn)"
+		}
+		fmt.Fprintf(writer, "branch: %s\n", branch)
+		fmt.Fprintf(writer, "HEAD: %s\n", firstDisplay(response.Repository.HeadCommit, "none"))
+		fmt.Fprintf(writer, "working tree: %s\n", response.Repository.WorkingTree)
+	}
+	fmt.Fprintf(writer, "upstream: %s\n", firstDisplay(response.Upstream.Name, "not configured"))
+	fmt.Fprintf(writer, "relation: %s (ahead %d, behind %d)\n", response.Upstream.Relation, response.Upstream.Ahead, response.Upstream.Behind)
+	remoteURLs := "not configured"
+	if len(response.LiveRemote.URLs) > 0 {
+		remoteURLs = strings.Join(response.LiveRemote.URLs, ", ")
+	}
+	fmt.Fprintf(writer, "remote %s: %s\n", response.LiveRemote.Name, remoteURLs)
+	renderStatusPaths(writer, "staged", response.Changes.Staged)
+	renderStatusPaths(writer, "unstaged", response.Changes.Unstaged)
+	renderStatusPaths(writer, "untracked", response.Changes.Untracked)
+	fmt.Fprintf(writer, "ignored paths: %d\n", response.Changes.IgnoredCount)
+	if response.LiveRemote.Requested {
+		fmt.Fprintf(writer, "live remote: %s\n", response.LiveRemote.Name)
+		fmt.Fprintf(writer, "live relation: %s\n", firstDisplay(response.LiveRemote.Relation, "not checked"))
+		if response.LiveRemote.Commit != "" {
+			fmt.Fprintf(writer, "live commit: %s\n", response.LiveRemote.Commit)
+		}
+		if response.LiveRemote.Detail != "" {
+			fmt.Fprintf(writer, "live detail: %s\n", response.LiveRemote.Detail)
+		}
+	}
+	for _, warning := range response.Warnings {
+		fmt.Fprintf(writer, "warning: %s\n", warning)
+	}
+	for _, action := range response.RecommendedActions {
+		fmt.Fprintf(writer, "next: %s\n", action)
+	}
+}
+
+func renderStatusPaths(writer io.Writer, label string, paths []string) {
+	if len(paths) == 0 {
+		fmt.Fprintf(writer, "%s: none\n", label)
+		return
+	}
+	fmt.Fprintf(writer, "%s (%d):\n", label, len(paths))
+	renderPaths(writer, paths)
+}
+
+func renderHistory(writer io.Writer, response app.HistoryResponse) {
+	fmt.Fprintf(writer, "history scope: %s\n", response.Scope)
+	if response.ProjectRoot != "" {
+		fmt.Fprintf(writer, "project: %s\n", response.ProjectRoot)
+	}
+	fmt.Fprintf(writer, "recording enabled: %t\n", response.RecordingEnabled)
+	if len(response.Records) == 0 {
+		fmt.Fprintln(writer, "records: none")
+		return
+	}
+	fmt.Fprintf(writer, "records (%d):\n", len(response.Records))
+	for _, record := range response.Records {
+		fmt.Fprintf(writer, "  - %s %s %s\n", record.FinishedAt.Format("2006-01-02T15:04:05Z07:00"), record.Workflow, record.Status)
+		if response.Scope == "all" {
+			fmt.Fprintf(writer, "    project: %s\n", firstDisplay(record.ProjectRoot, "unknown"))
+		}
+		fmt.Fprintf(writer, "    execution: %s\n", record.ExecutionID)
+		fmt.Fprintf(writer, "    plan: %s (%s)\n", record.PlanID, record.PlanDigest)
+		for _, step := range record.Steps {
+			fmt.Fprintf(writer, "    step: %s %s\n", step.CapabilityID, step.Status)
+		}
+		for _, hint := range record.RecoveryHints {
+			fmt.Fprintf(writer, "    recovery: %s\n", hint)
+		}
+	}
+	if response.HasMore {
+		fmt.Fprintf(writer, "more records available; increase --limit up to 200\n")
+	}
+}
+
+func firstDisplay(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

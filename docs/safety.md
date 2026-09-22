@@ -1,6 +1,6 @@
 # Safety And Threat Model
 
-Phase C keeps the existing read-only and repository behavior and adds the focused `dvz commit` mutation workflow. `find` searches in-memory built-in knowledge and has no process runner dependency. `doctor` reads bounded configuration and project evidence, then runs only fixed version probes. Repository and commit dry-runs inspect state and render typed plans without calling mutation adapters.
+Phase C keeps the existing read-only and repository behavior and adds focused daily Git workflows. `find` searches in-memory built-in knowledge and has no process runner dependency. `doctor` reads bounded configuration and project evidence, then runs only fixed version probes. `status` is offline unless live verification is explicitly requested, and `history` reads bounded local records. Repository and commit dry-runs inspect state and render typed plans without calling mutation adapters.
 
 ## Process Boundary
 
@@ -9,6 +9,8 @@ All subprocesses use an executable and argument slice, an explicit working direc
 ## Sensitive Data
 
 Configuration accepts no credential fields. Diagnostics and history redact common token, password, secret, authorization, and bearer forms. `repo create` checks `gh auth status` before remote writes but does not read or store tokens. Selected files receive a bounded secret preflight based on filenames and common content patterns; warnings require an explicit confirmation that `--yes` cannot bypass.
+
+History is redacted both before append and after read because the local file is untrusted. Public history output uses typed fields and does not expose arbitrary persisted invocation or project maps. Reads reject unsupported schemas, records over one MiB, and files over 32 MiB instead of silently dropping data. `status` and `history` do not append audit entries for themselves.
 
 ## Risk Labels
 
@@ -25,6 +27,8 @@ Dry-run performs planning and validation only. Tests assert zero mutation adapte
 `dvz commit` refuses a detached branch, existing staged content, ignored paths, unchanged paths, traversal, invalid messages, stale `HEAD`, or changed selected-file content. It requires the exact response `commit` against the rendered plan digest. If commit creation fails after staging, Devtize leaves the disclosed paths staged, records partial completion, and tells the user to inspect the index; it never guesses a destructive cleanup.
 
 The push-only `dvz ship` slice requires an attached branch with an exact configured upstream and one remote URL. It compares the live remote SHA to the local remote-tracking SHA, proves that SHA is an ancestor of local `HEAD`, discloses every outgoing commit and dirty path excluded from the push, and rechecks all of that around the digest-bound `push` confirmation. The adapter uses a full branch refspec and has no force option. A process failure is treated as an uncertain remote outcome and recovered through a fresh live inspection.
+
+`dvz status` invokes only repository, change, relation, and optional remote-branch reads. It never stages, fetches, pulls, rebases, resets, or writes refs. When a live SHA differs from local tracking state, Devtize reports stale tracking and does not infer ancestry from an object it has not fetched.
 
 Idempotency is based on live postcondition checks, not history alone. Devtize may skip satisfied init, staging, commit, repository creation, remote configuration, or push steps only after current Git/GitHub state verifies the postcondition. Unexpected origins, detached HEAD, incompatible remote repositories, empty selections, missing tools, and unauthenticated `gh` stop with actionable errors.
 

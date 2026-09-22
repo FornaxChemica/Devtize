@@ -1,0 +1,9 @@
+history scope: project
+project: /work/project
+recording enabled: true
+records (1):
+  - 2026-09-16T12:00:00Z commit succeeded
+    execution: exec_1
+    plan: plan_commit_1 (sha256:test)
+    step: git.commit.create succeeded
+more records available; increase --limit up to 200

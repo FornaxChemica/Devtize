@@ -227,7 +227,7 @@ func (s RepoService) ExecuteDescriptionPlanned(ctx context.Context, options Repo
 	response.Status = operation.StatusSucceeded
 	response.GitHubRepo = updated
 	response.Result = result
-	if err := s.writeHistoryInvocation(RepoResponse{Plan: response.Plan}, result, map[string]any{"repo_set_description": stringInput(op, "owner") + "/" + stringInput(op, "name")}); err != nil {
+	if err := s.writeHistoryInvocation(RepoResponse{Plan: response.Plan}, result, map[string]any{"workflow": "repo.set-description", "repo_set_description": stringInput(op, "owner") + "/" + stringInput(op, "name")}); err != nil {
 		return response, &Error{Code: CodeHistoryWriteFailed, Message: "history could not be written", Cause: err}
 	}
 	return response, nil
@@ -450,7 +450,7 @@ func (s RepoService) ExecuteInitialRedactionPlanned(ctx context.Context, options
 		result.RecoveryHints = append(result.RecoveryHints, "The local commit was rewritten but the remote was not. Re-run only after verifying the remote still points to the plan's expected commit.")
 		response.Status = operation.StatusCancelled
 		response.Result = result
-		_ = s.writeHistoryInvocation(response, result, map[string]any{"redact_initial_path": path})
+		_ = s.writeHistoryInvocation(response, result, map[string]any{"workflow": "repo.redact-initial", "redact_initial_path": path})
 		return response, &Error{Code: CodeConfirmationDeclined, Message: "remote replacement confirmation declined", Hint: result.RecoveryHints[len(result.RecoveryHints)-1]}
 	}
 	forceOp := response.Plan.Operations[len(response.Plan.Operations)-1]
@@ -467,7 +467,7 @@ func (s RepoService) ExecuteInitialRedactionPlanned(ctx context.Context, options
 	response.Status = operation.StatusSucceeded
 	response.Git = state
 	response.Result = result
-	if err := s.writeHistoryInvocation(response, result, map[string]any{"redact_initial_path": path}); err != nil {
+	if err := s.writeHistoryInvocation(response, result, map[string]any{"workflow": "repo.redact-initial", "redact_initial_path": path}); err != nil {
 		return response, &Error{Code: CodeHistoryWriteFailed, Message: "history could not be written", Cause: err}
 	}
 	return response, nil
@@ -1073,7 +1073,7 @@ func classifyProcess(provider, action string, err error) error {
 }
 
 func (s RepoService) writeHistory(response RepoResponse, result operation.ExecutionResult, options RepoOptions) error {
-	return s.writeHistoryInvocation(response, result, map[string]any{"dry_run": options.DryRun, "yes": options.Yes, "repair_unpushed_initial": options.RepairInitial})
+	return s.writeHistoryInvocation(response, result, map[string]any{"workflow": "repo.create", "dry_run": options.DryRun, "yes": options.Yes, "repair_unpushed_initial": options.RepairInitial})
 }
 
 func (s RepoService) writeHistoryInvocation(response RepoResponse, result operation.ExecutionResult, invocation map[string]any) error {
@@ -1092,7 +1092,7 @@ func (s RepoService) redactionFailure(response RepoResponse, result operation.Ex
 	result.Status = operation.StatusPartiallyCompleted
 	result.RecoveryHints = append(result.RecoveryHints, step.RecoveryHint)
 	response.Result = result
-	_ = s.writeHistoryInvocation(response, result, map[string]any{"redact_initial_path": options.Path})
+	_ = s.writeHistoryInvocation(response, result, map[string]any{"workflow": "repo.redact-initial", "redact_initial_path": options.Path})
 	return response, &Error{Code: CodePartialExecution, Message: step.ErrorMessage, Hint: step.RecoveryHint}
 }
 
@@ -1101,7 +1101,7 @@ func (s RepoService) redactionPostconditionFailure(response RepoResponse, result
 	hint := "Inspect the local commit, tracked files, and upstream before retrying; the exact lease prevents overwriting a concurrent remote update."
 	result.RecoveryHints = append(result.RecoveryHints, hint)
 	response.Result = result
-	_ = s.writeHistoryInvocation(response, result, map[string]any{"redact_initial_path": options.Path})
+	_ = s.writeHistoryInvocation(response, result, map[string]any{"workflow": "repo.redact-initial", "redact_initial_path": options.Path})
 	return response, &Error{Code: CodePostconditionFailed, Message: message, Cause: cause, Hint: hint}
 }
 

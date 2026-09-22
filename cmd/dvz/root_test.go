@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FornaxChemica/devtize/internal/app"
 	"github.com/FornaxChemica/devtize/internal/detect"
@@ -290,6 +291,28 @@ func TestGoldenCLIOutput(t *testing.T) {
 	var output bytes.Buffer
 	renderError(&output, true, &app.Error{Code: app.CodeCapabilityNotFound, Message: "no reviewed command knowledge matched the intent", Hint: "Try a more specific Git intent."})
 	assertGolden(t, "error-json.golden", output.String())
+
+	output.Reset()
+	renderStatus(&output, app.StatusResponse{
+		SchemaVersion: 1, ProjectRoot: "/work/project",
+		Repository:         app.RepositoryStatus{IsRepository: true, HasCommits: true, Branch: "main", HeadCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", WorkingTree: "dirty"},
+		Changes:            app.ChangeStatus{Staged: []string{}, Unstaged: []string{"README.md"}, Untracked: []string{"notes.txt"}, IgnoredCount: 2},
+		Upstream:           app.UpstreamStatus{Name: "origin/main", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Ahead: 1, Relation: "ahead"},
+		LiveRemote:         app.LiveRemoteStatus{Requested: true, Name: "origin", URLs: []string{"https://example.invalid/project.git"}, Branch: "main", Exists: true, Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Relation: "local_ahead", Detail: "The live branch matches local tracking state and local HEAD is ahead."},
+		RecommendedActions: []string{"Use dvz commit with explicit paths and a reviewed message when these changes are ready.", "Run dvz ship to review and push the outgoing commits."},
+	})
+	assertGolden(t, "status.golden", output.String())
+
+	output.Reset()
+	renderHistory(&output, app.HistoryResponse{
+		SchemaVersion: 1, Scope: "project", ProjectRoot: "/work/project", Limit: 1, RecordingEnabled: true, HasMore: true,
+		Records: []app.HistoryEntry{{
+			SchemaVersion: 1, ExecutionID: "exec_1", Workflow: "commit", PlanID: "plan_commit_1", PlanDigest: "sha256:test",
+			FinishedAt: time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC), Status: operation.StatusSucceeded,
+			Steps: []operation.StepResult{{CapabilityID: "git.commit.create", Status: operation.StatusSucceeded}},
+		}},
+	})
+	assertGolden(t, "history.golden", output.String())
 }
 
 func assertGolden(t *testing.T, name, got string) {

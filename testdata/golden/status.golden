@@ -1,0 +1,20 @@
+project: /work/project
+repository: initialized
+branch: main
+HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+working tree: dirty
+upstream: origin/main
+relation: ahead (ahead 1, behind 0)
+remote origin: https://example.invalid/project.git
+staged: none
+unstaged (1):
+  - README.md
+untracked (1):
+  - notes.txt
+ignored paths: 2
+live remote: origin
+live relation: local_ahead
+live commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+live detail: The live branch matches local tracking state and local HEAD is ahead.
+next: Use dvz commit with explicit paths and a reviewed message when these changes are ready.
+next: Run dvz ship to review and push the outgoing commits.
