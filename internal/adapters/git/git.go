@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +136,16 @@ type ChangeSet struct {
 	Unstaged  []string `json:"unstaged,omitempty"`
 	Untracked []string `json:"untracked,omitempty"`
 	Ignored   []string `json:"ignored,omitempty"`
+}
+
+func (a Adapter) ListVisibleFiles(ctx context.Context, projectRoot string) ([]string, error) {
+	result, err := a.run(ctx, projectRoot, "ls-files", "-co", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	paths := nulFields(result.Stdout)
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func (a Adapter) InspectRepo(ctx context.Context, input InspectRepoInput) (InspectRepoResult, error) {

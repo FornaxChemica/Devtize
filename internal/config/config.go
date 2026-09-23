@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/FornaxChemica/devtize/internal/registry"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +29,7 @@ type Config struct {
 	AI      AIConfig      `json:"ai" yaml:"ai"`
 	Safety  SafetyConfig  `json:"safety" yaml:"safety"`
 	History HistoryConfig `json:"history" yaml:"history"`
+	Checks  ChecksConfig  `json:"checks" yaml:"checks"`
 	Git     GitConfig     `json:"git" yaml:"git"`
 	GitHub  GitHubConfig  `json:"github" yaml:"github"`
 }
@@ -48,6 +50,10 @@ type SafetyConfig struct {
 
 type HistoryConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
+type ChecksConfig struct {
+	Ship []string `json:"ship" yaml:"ship"`
 }
 
 type GitConfig struct {
@@ -83,6 +89,7 @@ type fileConfig struct {
 	AI      *fileAI      `yaml:"ai"`
 	Safety  *fileSafety  `yaml:"safety"`
 	History *fileHistory `yaml:"history"`
+	Checks  *fileChecks  `yaml:"checks"`
 	Git     *fileGit     `yaml:"git"`
 	GitHub  *fileGitHub  `yaml:"github"`
 }
@@ -103,6 +110,10 @@ type fileSafety struct {
 
 type fileHistory struct {
 	Enabled *bool `yaml:"enabled"`
+}
+
+type fileChecks struct {
+	Ship []string `yaml:"ship"`
 }
 
 type fileGit struct {
@@ -197,6 +208,9 @@ func (c Config) Validate() error {
 	if c.Git.DefaultBranch == "" {
 		return errors.New("git.default_branch is required")
 	}
+	if err := registry.ValidateCheckIDs(c.Checks.Ship); err != nil {
+		return err
+	}
 	switch c.GitHub.Visibility {
 	case "private", "public":
 	default:
@@ -286,6 +300,9 @@ func applyFile(path string, result *Result) error {
 	}
 	if layer.History != nil && layer.History.Enabled != nil {
 		result.Config.History.Enabled = *layer.History.Enabled
+	}
+	if layer.Checks != nil && layer.Checks.Ship != nil {
+		result.Config.Checks.Ship = append([]string(nil), layer.Checks.Ship...)
 	}
 	if layer.Git != nil && layer.Git.DefaultBranch != nil {
 		result.Config.Git.DefaultBranch = *layer.Git.DefaultBranch

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -191,6 +192,17 @@ func TestInvalidUseAndJSONErrorMapping(t *testing.T) {
 	}
 	if exitCode(wrapped) != exitInvalid {
 		t.Fatalf("exit code = %d", exitCode(wrapped))
+	}
+}
+
+func TestShipPathsAndChecksRequireMessage(t *testing.T) {
+	deps := testDependencies(t, &spyRunner{})
+	for _, args := range [][]string{{"ship", "README.md"}, {"ship", "--check", "go.test"}} {
+		_, _, err := execute(t, deps, args...)
+		var operational *app.Error
+		if !errors.As(err, &operational) || operational.Code != app.CodeInvalidUsage {
+			t.Fatalf("dvz %v err=%v", args, err)
+		}
 	}
 }
 

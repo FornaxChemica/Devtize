@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/FornaxChemica/devtize/internal/app"
 	"github.com/FornaxChemica/devtize/internal/config"
@@ -17,6 +15,7 @@ import (
 	"github.com/FornaxChemica/devtize/internal/operation"
 	devprocess "github.com/FornaxChemica/devtize/internal/process"
 	"github.com/FornaxChemica/devtize/internal/search"
+	"github.com/FornaxChemica/devtize/internal/ui"
 	"github.com/FornaxChemica/devtize/registry/builtin"
 	"github.com/spf13/cobra"
 )
@@ -74,7 +73,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if !errors.As(err, &operational) {
 		err = app.Wrap(app.CodeInvalidUsage, err.Error(), err)
 	}
-	renderError(stderr, options.jsonOutput, err)
+	color := config.ColorAuto
+	if options.noColor {
+		color = config.ColorNever
+	}
+	renderError(stderr, options.jsonOutput, err, ui.Options{Color: color, Environment: config.Environment(os.Environ())})
 	return exitCode(err)
 }
 
@@ -114,7 +117,8 @@ func statusCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer
 	command := &cobra.Command{
 		Use: "status", Short: "Inspect daily Git status without mutation", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			if _, err := loadConfig(deps, rootOptions); err != nil {
+			loaded, err := loadConfig(deps, rootOptions)
+			if err != nil {
 				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
 			}
 			response, err := statusService(deps).Run(command.Context(), options)
@@ -124,7 +128,7 @@ func statusCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer
 			if rootOptions.jsonOutput {
 				return writeJSON(stdout, response)
 			}
-			renderStatus(stdout, response)
+			renderStatus(stdout, response, humanUIOptions(deps, loaded.Config))
 			return nil
 		},
 	}
@@ -149,7 +153,7 @@ func historyCommand(deps dependencies, rootOptions *rootOptions, stdout io.Write
 			if rootOptions.jsonOutput {
 				return writeJSON(stdout, response)
 			}
-			renderHistory(stdout, response)
+			renderHistory(stdout, response, humanUIOptions(deps, loaded.Config))
 			return nil
 		},
 	}
@@ -159,37 +163,101 @@ func historyCommand(deps dependencies, rootOptions *rootOptions, stdout io.Write
 }
 
 func shipCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
-	var options app.ShipOptions
+	workflowOptions := app.ShipWorkflowOptions{Conventional: true}
+	var checkOverrides []string
 	command := &cobra.Command{
-		Use: "ship", Short: "Push reviewed local commits without force", Args: cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
+		Use: "ship [paths...]", Short: "Run reviewed checks, commit, and push without force",
+		RunE: func(command *cobra.Command, paths []string) error {
 			loaded, err := loadConfig(deps, rootOptions)
 			if err != nil {
 				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
 			}
-			service := shipService(deps, loaded.Config, stdout)
-			response, err := service.Plan(command.Context(), options)
+			checkChanged := command.Flags().Changed("check")
+			compose := workflowOptions.Message != "" || len(paths) > 0 || checkChanged
+			if !compose {
+				options := app.ShipOptions{Remote: workflowOptions.Remote, DryRun: workflowOptions.DryRun, PlanJSON: workflowOptions.PlanJSON}
+				service := shipService(deps, loaded.Config, stdout)
+				response, planErr := service.Plan(command.Context(), options)
+				if planErr != nil {
+					return planErr
+				}
+				if !rootOptions.jsonOutput && !options.PlanJSON {
+					renderShipPlan(stdout, response, humanUIOptions(deps, loaded.Config))
+				}
+				response, planErr = service.ExecutePlanned(command.Context(), options, command.InOrStdin(), response)
+				if rootOptions.jsonOutput || options.PlanJSON {
+					if options.PlanJSON {
+						return writeJSON(stdout, response.Plan)
+					}
+					_ = writeJSON(stdout, response)
+				} else if response.Result.Status != "" {
+					renderRepoResult(stdout, response.Result, humanUIOptions(deps, loaded.Config))
+				}
+				return planErr
+			}
+			if workflowOptions.Message == "" {
+				return &app.Error{Code: app.CodeInvalidUsage, Message: "ship paths and --check require --message"}
+			}
+			workflowOptions.Paths = paths
+			workflowOptions.Checks = append([]string(nil), loaded.Config.Checks.Ship...)
+			if checkChanged {
+				workflowOptions.Checks = append([]string(nil), checkOverrides...)
+			}
+			service := shipWorkflowService(deps, loaded.Config, stdout, rootOptions.jsonOutput)
+			response, err := service.Plan(command.Context(), workflowOptions)
 			if err != nil {
 				return err
 			}
-			if !rootOptions.jsonOutput && !options.PlanJSON {
-				renderShipPlan(stdout, response)
-			}
-			response, err = service.ExecutePlanned(command.Context(), options, command.InOrStdin(), response)
-			if rootOptions.jsonOutput || options.PlanJSON {
-				if options.PlanJSON {
-					return writeJSON(stdout, response.Plan)
+			if rootOptions.jsonOutput || workflowOptions.PlanJSON {
+				if workflowOptions.PlanJSON {
+					return writeJSON(stdout, response)
 				}
+			} else {
+				renderShipWorkflowPlan(stdout, response, humanUIOptions(deps, loaded.Config))
+			}
+			if workflowOptions.DryRun {
+				if rootOptions.jsonOutput {
+					return writeJSON(stdout, response)
+				}
+				return nil
+			}
+			response, err = service.ExecuteLocal(command.Context(), workflowOptions, command.InOrStdin(), response)
+			if err != nil {
+				if rootOptions.jsonOutput {
+					_ = writeJSON(stdout, response)
+				} else if response.Local.Result.Status != "" {
+					renderRepoResult(stdout, response.Local.Result, humanUIOptions(deps, loaded.Config))
+				}
+				return err
+			}
+			if !rootOptions.jsonOutput {
+				renderRepoResult(stdout, response.Local.Result, humanUIOptions(deps, loaded.Config))
+			}
+			response, err = service.PlanPush(command.Context(), workflowOptions, response)
+			if err != nil {
+				if rootOptions.jsonOutput {
+					_ = writeJSON(stdout, response)
+				}
+				return err
+			}
+			if !rootOptions.jsonOutput && response.Push != nil {
+				renderShipPlan(stdout, *response.Push, humanUIOptions(deps, loaded.Config))
+			}
+			response, err = service.ExecutePush(command.Context(), workflowOptions, command.InOrStdin(), response)
+			if rootOptions.jsonOutput {
 				_ = writeJSON(stdout, response)
-			} else if response.Result.Status != "" {
-				renderRepoResult(stdout, response.Result)
+			} else if response.Push != nil && response.Push.Result.Status != "" {
+				renderRepoResult(stdout, response.Push.Result, humanUIOptions(deps, loaded.Config))
 			}
 			return err
 		},
 	}
-	command.Flags().StringVar(&options.Remote, "remote", "origin", "Git remote name")
-	command.Flags().BoolVar(&options.DryRun, "dry-run", false, "render and validate the plan without mutation")
-	command.Flags().BoolVar(&options.PlanJSON, "plan-json", false, "print versioned plan JSON and exit before confirmation")
+	command.Flags().StringVarP(&workflowOptions.Message, "message", "m", "", "commit message for composed ship")
+	command.Flags().BoolVar(&workflowOptions.Conventional, "conventional", true, "require Conventional Commit syntax")
+	command.Flags().StringArrayVar(&checkOverrides, "check", nil, "reviewed check capability ID (repeatable; replaces configured checks)")
+	command.Flags().StringVar(&workflowOptions.Remote, "remote", "origin", "Git remote name")
+	command.Flags().BoolVar(&workflowOptions.DryRun, "dry-run", false, "render and validate the plan without mutation")
+	command.Flags().BoolVar(&workflowOptions.PlanJSON, "plan-json", false, "print versioned plan JSON and exit before confirmation")
 	return command
 }
 
@@ -209,7 +277,7 @@ func commitCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer
 				return err
 			}
 			if !rootOptions.jsonOutput && !options.PlanJSON {
-				renderCommitPlan(stdout, response)
+				renderCommitPlan(stdout, response, humanUIOptions(deps, loaded.Config))
 			}
 			response, err = service.ExecutePlanned(command.Context(), options, command.InOrStdin(), response)
 			if rootOptions.jsonOutput || options.PlanJSON {
@@ -218,7 +286,7 @@ func commitCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer
 				}
 				_ = writeJSON(stdout, response)
 			} else if response.Result.Status != "" {
-				renderRepoResult(stdout, response.Result)
+				renderRepoResult(stdout, response.Result, humanUIOptions(deps, loaded.Config))
 			}
 			return err
 		},
@@ -238,8 +306,8 @@ func versionCommand(options *rootOptions, stdout io.Writer) *cobra.Command {
 			if options.jsonOutput {
 				return writeJSON(stdout, info)
 			}
-			_, err := fmt.Fprintf(stdout, "%s %s (%s, commit %s, built %s)\n", info.Product, info.Version, info.Command, info.Commit, info.BuiltAt)
-			return err
+			ui.New(stdout, firstUIOptions(nil)).Version(info)
+			return nil
 		},
 	}
 }
@@ -278,7 +346,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				return err
 			}
 			if !options.jsonOutput && !repoOptions.PlanJSON {
-				renderRepoPlan(stdout, response)
+				renderRepoPlan(stdout, response, humanUIOptions(deps, loaded.Config))
 			}
 			response, err = service.ExecutePlanned(command.Context(), repoOptions, command.InOrStdin(), response)
 			if options.jsonOutput || repoOptions.PlanJSON {
@@ -288,7 +356,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				_ = writeJSON(stdout, response)
 			} else {
 				if response.Result.Status != "" {
-					renderRepoResult(stdout, response.Result)
+					renderRepoResult(stdout, response.Result, humanUIOptions(deps, loaded.Config))
 				}
 			}
 			return err
@@ -315,7 +383,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				}
 				return writeJSON(stdout, response)
 			}
-			renderRepoPlan(stdout, response)
+			renderRepoPlan(stdout, response, humanUIOptions(deps, loaded.Config))
 			return nil
 		},
 	}
@@ -335,7 +403,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 			if options.jsonOutput {
 				return writeJSON(stdout, response)
 			}
-			renderRepoStatus(stdout, response)
+			renderRepoStatus(stdout, response, humanUIOptions(deps, loaded.Config))
 			return nil
 		},
 	}
@@ -354,7 +422,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				return err
 			}
 			if !options.jsonOutput && !redactOptions.PlanJSON {
-				renderRepoPlan(stdout, response)
+				renderRepoPlan(stdout, response, humanUIOptions(deps, loaded.Config))
 			}
 			response, err = service.ExecuteInitialRedactionPlanned(command.Context(), redactOptions, command.InOrStdin(), response)
 			if options.jsonOutput || redactOptions.PlanJSON {
@@ -363,7 +431,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				}
 				_ = writeJSON(stdout, response)
 			} else if response.Result.Status != "" {
-				renderRepoResult(stdout, response.Result)
+				renderRepoResult(stdout, response.Result, humanUIOptions(deps, loaded.Config))
 			}
 			return err
 		},
@@ -384,7 +452,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				return err
 			}
 			if !options.jsonOutput && !descriptionOptions.PlanJSON {
-				renderRepoDescriptionPlan(stdout, response)
+				renderRepoDescriptionPlan(stdout, response, humanUIOptions(deps, loaded.Config))
 			}
 			response, err = service.ExecuteDescriptionPlanned(command.Context(), descriptionOptions, command.InOrStdin(), response)
 			if options.jsonOutput || descriptionOptions.PlanJSON {
@@ -393,7 +461,7 @@ func repoCommand(deps dependencies, options *rootOptions, stdout io.Writer) *cob
 				}
 				_ = writeJSON(stdout, response)
 			} else if response.Result.Status != "" {
-				renderRepoResult(stdout, response.Result)
+				renderRepoResult(stdout, response.Result, humanUIOptions(deps, loaded.Config))
 			}
 			return err
 		},
@@ -419,6 +487,17 @@ func shipService(deps dependencies, cfg config.Config, output io.Writer) app.Shi
 	return app.ShipService{WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner, History: history.Store{Path: localHistoryPath(deps)}, Output: output}
 }
 
+func shipWorkflowService(deps dependencies, cfg config.Config, output io.Writer, jsonOutput bool) app.ShipWorkflowService {
+	service := app.ShipWorkflowService{
+		WorkingDir: deps.workingDir, Config: cfg, Runner: deps.runner,
+		History: history.Store{Path: localHistoryPath(deps)}, Output: output,
+	}
+	if !jsonOutput {
+		service.Progress = ui.New(output, humanUIOptions(deps, cfg))
+	}
+	return service
+}
+
 func statusService(deps dependencies) app.StatusService {
 	return app.StatusService{WorkingDir: deps.workingDir, Runner: deps.runner}
 }
@@ -439,7 +518,8 @@ func findCommand(deps dependencies, options *rootOptions, service app.FindServic
 	return &cobra.Command{
 		Use: "find <intent>", Short: "Find reviewed command knowledge without executing it", Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, words []string) error {
-			if _, err := loadConfig(deps, options); err != nil {
+			loaded, err := loadConfig(deps, options)
+			if err != nil {
 				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
 			}
 			response, err := service.Find(words)
@@ -449,11 +529,7 @@ func findCommand(deps dependencies, options *rootOptions, service app.FindServic
 			if options.jsonOutput {
 				return writeJSON(stdout, response)
 			}
-			for _, result := range response.Results {
-				fmt.Fprintf(stdout, "%s\n  %s\n  source: %s; risk: %s; match: %s (%s)\n", result.Command, result.Summary, result.Source.Kind, result.Risk, result.MatchReason, result.Confidence)
-				fmt.Fprintf(stdout, "  versions: %s (%s)\n", result.VersionRange, result.VersionStatus)
-				fmt.Fprintf(stdout, "  effect: %s\n", strings.Join(result.Effects, "; "))
-			}
+			ui.New(stdout, humanUIOptions(deps, loaded.Config)).Find(response)
 			return nil
 		},
 	}
@@ -491,7 +567,7 @@ func doctorCommand(deps dependencies, options *rootOptions, registryCount int, s
 					return err
 				}
 			} else {
-				renderDoctor(stdout, response)
+				renderDoctor(stdout, response, humanUIOptions(deps, loaded.Config))
 			}
 			if loadErr != nil {
 				return app.Wrap(app.CodeConfigInvalid, "configuration is invalid", loadErr)
@@ -513,25 +589,8 @@ func loadConfig(deps dependencies, options *rootOptions) (config.Result, error) 
 	})
 }
 
-func renderDoctor(writer io.Writer, response app.DoctorResponse) {
-	fmt.Fprintf(writer, "Devtize doctor: %s\n", response.Status)
-	fmt.Fprintf(writer, "config: %s\n", response.Config.Status)
-	if response.Project.Status == "detected" {
-		fmt.Fprintf(writer, "project: detected (%s, confidence %s, ambiguous %t)\n", response.Project.Root, response.Project.Confidence, response.Project.Ambiguous)
-	} else {
-		fmt.Fprintln(writer, "project: not found")
-	}
-	for _, tool := range response.Tools {
-		line := fmt.Sprintf("%s: %s", tool.ProviderID, tool.Status)
-		if tool.Version != "" {
-			line += " " + tool.Version
-		}
-		if tool.AuthStatus != "" {
-			line += "; auth " + tool.AuthStatus
-		}
-		fmt.Fprintln(writer, line)
-	}
-	fmt.Fprintf(writer, "registry: %s (%s; %d reviewed builtin entries)\n", response.Registry.Status, response.Registry.KnowledgeStatus, response.Registry.Entries)
+func renderDoctor(writer io.Writer, response app.DoctorResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).Doctor(response)
 }
 
 func writeJSON(writer io.Writer, value any) error {
@@ -546,7 +605,7 @@ type errorEnvelope struct {
 	Error         *app.Error `json:"error"`
 }
 
-func renderError(writer io.Writer, jsonOutput bool, err error) {
+func renderError(writer io.Writer, jsonOutput bool, err error, options ...ui.Options) {
 	var operational *app.Error
 	if !errors.As(err, &operational) {
 		operational = app.Wrap(app.CodeProcessFailed, "command failed", err)
@@ -555,7 +614,7 @@ func renderError(writer io.Writer, jsonOutput bool, err error) {
 		_ = writeJSON(writer, errorEnvelope{SchemaVersion: 1, Error: operational})
 		return
 	}
-	fmt.Fprintln(writer, operational.SafeText())
+	ui.New(writer, firstUIOptions(options)).Error(operational)
 }
 
 func exitCode(err error) int {
@@ -576,7 +635,7 @@ func exitCode(err error) int {
 		return exitMissingDependency
 	case app.CodeAuthRequired:
 		return exitMissingDependency
-	case app.CodeProcessTimeout, app.CodeProcessFailed, app.CodePartialExecution, app.CodeHistoryWriteFailed, app.CodeHistoryReadFailed, app.CodePostconditionFailed:
+	case app.CodeCheckFailed, app.CodeProcessTimeout, app.CodeProcessFailed, app.CodePartialExecution, app.CodeHistoryWriteFailed, app.CodeHistoryReadFailed, app.CodePostconditionFailed:
 		return exitProcessFailure
 	case app.CodeHistoryInvalid:
 		return exitInvalid
@@ -585,265 +644,49 @@ func exitCode(err error) int {
 	}
 }
 
-func renderRepoPlan(writer io.Writer, response app.RepoResponse) {
-	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
-	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
-	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
-	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
-	fmt.Fprintf(writer, "selected files (%s):\n", response.Selection.Mode)
-	renderPaths(writer, response.Selection.Paths)
-	if len(response.Selection.UntrackPaths) > 0 {
-		fmt.Fprintf(writer, "tracked ignored paths to remove from the commit (%d):\n", len(response.Selection.UntrackPaths))
-		renderPaths(writer, response.Selection.UntrackPaths)
-	}
-	for _, warning := range response.Warnings {
-		fmt.Fprintf(writer, "warning: %s\n", warning)
-	}
-	fmt.Fprintln(writer, "operations:")
-	for _, op := range response.Plan.Operations {
-		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
-		for _, effect := range op.Effects {
-			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
-		}
-	}
+func renderRepoPlan(writer io.Writer, response app.RepoResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).RepoPlan(response)
 }
 
-func renderRepoDescriptionPlan(writer io.Writer, response app.RepoDescriptionResponse) {
-	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
-	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
-	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
-	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
-	fmt.Fprintf(writer, "repository: %s\n", response.GitHubRepo.NameWithOwner)
-	fmt.Fprintf(writer, "current description: %s\n", response.GitHubRepo.Description)
-	if len(response.Plan.Operations) == 0 {
-		fmt.Fprintln(writer, "operations: none (description already matches)")
-		return
-	}
-	fmt.Fprintf(writer, "new description: %s\n", response.Plan.Operations[0].Inputs["description"])
-	fmt.Fprintln(writer, "operations:")
-	for _, op := range response.Plan.Operations {
-		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
-		for _, effect := range op.Effects {
-			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
-		}
-	}
+func renderRepoDescriptionPlan(writer io.Writer, response app.RepoDescriptionResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).RepoDescriptionPlan(response)
 }
 
-func renderCommitPlan(writer io.Writer, response app.CommitResponse) {
-	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
-	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
-	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
-	fmt.Fprintf(writer, "branch: %s\n", response.Git.HeadBranch)
-	fmt.Fprintf(writer, "HEAD: %s\n", response.Git.HeadCommit)
-	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
-	fmt.Fprintf(writer, "message: %s\n", response.Plan.Operations[1].Inputs["message"])
-	fmt.Fprintf(writer, "selected files (%s):\n", response.Selection.Mode)
-	renderPaths(writer, response.Selection.Paths)
-	for _, warning := range response.Selection.Warnings {
-		fmt.Fprintf(writer, "warning: %s\n", warning)
-	}
-	fmt.Fprintln(writer, "operations:")
-	for _, op := range response.Plan.Operations {
-		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
-		for _, effect := range op.Effects {
-			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
-		}
-	}
+func renderCommitPlan(writer io.Writer, response app.CommitResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).CommitPlan(response)
 }
 
-func renderShipPlan(writer io.Writer, response app.ShipResponse) {
-	fmt.Fprintf(writer, "Plan %s\n", response.Plan.ID)
-	fmt.Fprintf(writer, "digest: %s\n", response.Plan.Digest)
-	fmt.Fprintf(writer, "project: %s\n", response.Plan.ProjectRoot)
-	fmt.Fprintf(writer, "dry-run: %t\n", response.Plan.DryRun)
-	fmt.Fprintf(writer, "remote: %s (%s)\n", response.RemoteName, response.RemoteURL)
-	fmt.Fprintf(writer, "branch: %s\n", response.Git.HeadBranch)
-	fmt.Fprintf(writer, "live remote: %s\n", response.RemoteCommit)
-	fmt.Fprintf(writer, "local HEAD: %s\n", response.Git.HeadCommit)
-	if len(response.Commits) == 0 {
-		fmt.Fprintln(writer, "outgoing commits: none")
-	} else {
-		fmt.Fprintf(writer, "outgoing commits (%d):\n", len(response.Commits))
-		for _, commit := range response.Commits {
-			sha := commit.SHA
-			if len(sha) > 12 {
-				sha = sha[:12]
-			}
-			fmt.Fprintf(writer, "  - %s %s\n", sha, commit.Subject)
-		}
-	}
-	if len(response.ExcludedPaths) == 0 {
-		fmt.Fprintln(writer, "excluded working changes: none")
-	} else {
-		fmt.Fprintln(writer, "excluded working changes:")
-		renderPaths(writer, response.ExcludedPaths)
-	}
-	if len(response.Plan.Operations) == 0 {
-		fmt.Fprintln(writer, "operations: none (remote already matches local HEAD)")
-		return
-	}
-	fmt.Fprintln(writer, "operations:")
-	for _, op := range response.Plan.Operations {
-		fmt.Fprintf(writer, "  - %s [%s] %s\n", op.CapabilityID, op.Risk, op.Summary)
-		for _, effect := range op.Effects {
-			fmt.Fprintf(writer, "    effect: %s %s\n", effect.Kind, effect.Target)
-		}
-	}
+func renderShipPlan(writer io.Writer, response app.ShipResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).ShipPlan(response)
 }
 
-func renderPaths(writer io.Writer, paths []string) {
-	if len(paths) <= 100 {
-		for _, path := range paths {
-			fmt.Fprintf(writer, "  - %s\n", path)
-		}
-		return
-	}
-	type group struct {
-		prefix string
-		paths  []string
-	}
-	groupsByPrefix := map[string][]string{}
-	for _, path := range paths {
-		parts := strings.Split(path, "/")
-		prefix := path
-		if len(parts) >= 2 {
-			prefix = strings.Join(parts[:2], "/")
-		}
-		groupsByPrefix[prefix] = append(groupsByPrefix[prefix], path)
-	}
-	var groups []group
-	for prefix, grouped := range groupsByPrefix {
-		groups = append(groups, group{prefix: prefix, paths: grouped})
-	}
-	sort.Slice(groups, func(i, j int) bool { return groups[i].prefix < groups[j].prefix })
-	for _, grouped := range groups {
-		if len(grouped.paths) > 10 && strings.Contains(grouped.paths[0], "/") {
-			fmt.Fprintf(writer, "  - %s/** (%d paths)\n", grouped.prefix, len(grouped.paths))
-			continue
-		}
-		for _, path := range grouped.paths {
-			fmt.Fprintf(writer, "  - %s\n", path)
-		}
-	}
-	fmt.Fprintln(writer, "  exact paths are retained in the plan digest and available with --plan-json")
+func renderShipWorkflowPlan(writer io.Writer, response app.ShipWorkflowResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).ShipWorkflowPlan(response)
 }
 
-func renderRepoResult(writer io.Writer, result operation.ExecutionResult) {
-	fmt.Fprintf(writer, "result: %s\n", result.Status)
-	for _, step := range result.Steps {
-		fmt.Fprintf(writer, "  - %s: %s\n", step.CapabilityID, step.Status)
-		if step.RecoveryHint != "" {
-			fmt.Fprintf(writer, "    recovery: %s\n", step.RecoveryHint)
-		}
-	}
+func renderRepoResult(writer io.Writer, result operation.ExecutionResult, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).Result(result)
 }
 
-func renderRepoStatus(writer io.Writer, response app.RepoResponse) {
-	if !response.Git.IsRepository {
-		fmt.Fprintln(writer, "repository: not initialized")
-		return
-	}
-	fmt.Fprintln(writer, "repository: initialized")
-	fmt.Fprintf(writer, "branch: %s\n", response.Git.HeadBranch)
-	fmt.Fprintf(writer, "commit: %s\n", response.Git.HeadCommit)
-	fmt.Fprintf(writer, "working tree: %s\n", response.Git.WorkingTreeStatus)
-	if response.Git.Upstream == "" {
-		fmt.Fprintln(writer, "upstream: not configured")
-	} else {
-		fmt.Fprintf(writer, "upstream: %s\n", response.Git.Upstream)
-	}
-	if len(response.Git.RemoteURLs) == 0 {
-		fmt.Fprintln(writer, "origin: not configured")
-	} else {
-		fmt.Fprintf(writer, "origin: %s\n", strings.Join(response.Git.RemoteURLs, ", "))
-	}
+func renderRepoStatus(writer io.Writer, response app.RepoResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).RepoStatus(response)
 }
 
-func renderStatus(writer io.Writer, response app.StatusResponse) {
-	fmt.Fprintf(writer, "project: %s\n", response.ProjectRoot)
-	if !response.Repository.IsRepository {
-		fmt.Fprintln(writer, "repository: not initialized")
-	} else {
-		fmt.Fprintln(writer, "repository: initialized")
-		branch := response.Repository.Branch
-		if branch == "" {
-			branch = "(detached or unborn)"
-		}
-		fmt.Fprintf(writer, "branch: %s\n", branch)
-		fmt.Fprintf(writer, "HEAD: %s\n", firstDisplay(response.Repository.HeadCommit, "none"))
-		fmt.Fprintf(writer, "working tree: %s\n", response.Repository.WorkingTree)
-	}
-	fmt.Fprintf(writer, "upstream: %s\n", firstDisplay(response.Upstream.Name, "not configured"))
-	fmt.Fprintf(writer, "relation: %s (ahead %d, behind %d)\n", response.Upstream.Relation, response.Upstream.Ahead, response.Upstream.Behind)
-	remoteURLs := "not configured"
-	if len(response.LiveRemote.URLs) > 0 {
-		remoteURLs = strings.Join(response.LiveRemote.URLs, ", ")
-	}
-	fmt.Fprintf(writer, "remote %s: %s\n", response.LiveRemote.Name, remoteURLs)
-	renderStatusPaths(writer, "staged", response.Changes.Staged)
-	renderStatusPaths(writer, "unstaged", response.Changes.Unstaged)
-	renderStatusPaths(writer, "untracked", response.Changes.Untracked)
-	fmt.Fprintf(writer, "ignored paths: %d\n", response.Changes.IgnoredCount)
-	if response.LiveRemote.Requested {
-		fmt.Fprintf(writer, "live remote: %s\n", response.LiveRemote.Name)
-		fmt.Fprintf(writer, "live relation: %s\n", firstDisplay(response.LiveRemote.Relation, "not checked"))
-		if response.LiveRemote.Commit != "" {
-			fmt.Fprintf(writer, "live commit: %s\n", response.LiveRemote.Commit)
-		}
-		if response.LiveRemote.Detail != "" {
-			fmt.Fprintf(writer, "live detail: %s\n", response.LiveRemote.Detail)
-		}
-	}
-	for _, warning := range response.Warnings {
-		fmt.Fprintf(writer, "warning: %s\n", warning)
-	}
-	for _, action := range response.RecommendedActions {
-		fmt.Fprintf(writer, "next: %s\n", action)
-	}
+func renderStatus(writer io.Writer, response app.StatusResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).Status(response)
 }
 
-func renderStatusPaths(writer io.Writer, label string, paths []string) {
-	if len(paths) == 0 {
-		fmt.Fprintf(writer, "%s: none\n", label)
-		return
-	}
-	fmt.Fprintf(writer, "%s (%d):\n", label, len(paths))
-	renderPaths(writer, paths)
+func renderHistory(writer io.Writer, response app.HistoryResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).History(response)
 }
 
-func renderHistory(writer io.Writer, response app.HistoryResponse) {
-	fmt.Fprintf(writer, "history scope: %s\n", response.Scope)
-	if response.ProjectRoot != "" {
-		fmt.Fprintf(writer, "project: %s\n", response.ProjectRoot)
+func firstUIOptions(options []ui.Options) ui.Options {
+	if len(options) > 0 {
+		return options[0]
 	}
-	fmt.Fprintf(writer, "recording enabled: %t\n", response.RecordingEnabled)
-	if len(response.Records) == 0 {
-		fmt.Fprintln(writer, "records: none")
-		return
-	}
-	fmt.Fprintf(writer, "records (%d):\n", len(response.Records))
-	for _, record := range response.Records {
-		fmt.Fprintf(writer, "  - %s %s %s\n", record.FinishedAt.Format("2006-01-02T15:04:05Z07:00"), record.Workflow, record.Status)
-		if response.Scope == "all" {
-			fmt.Fprintf(writer, "    project: %s\n", firstDisplay(record.ProjectRoot, "unknown"))
-		}
-		fmt.Fprintf(writer, "    execution: %s\n", record.ExecutionID)
-		fmt.Fprintf(writer, "    plan: %s (%s)\n", record.PlanID, record.PlanDigest)
-		for _, step := range record.Steps {
-			fmt.Fprintf(writer, "    step: %s %s\n", step.CapabilityID, step.Status)
-		}
-		for _, hint := range record.RecoveryHints {
-			fmt.Fprintf(writer, "    recovery: %s\n", hint)
-		}
-	}
-	if response.HasMore {
-		fmt.Fprintf(writer, "more records available; increase --limit up to 200\n")
-	}
+	return ui.Options{Color: config.ColorAuto, Environment: config.Environment(os.Environ())}
 }
 
-func firstDisplay(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
+func humanUIOptions(deps dependencies, cfg config.Config) ui.Options {
+	return ui.Options{Color: cfg.UI.Color, Environment: deps.environment}
 }

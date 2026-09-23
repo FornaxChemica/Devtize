@@ -79,6 +79,53 @@ type Catalog struct {
 	commands []CommandKnowledge
 }
 
+// CheckCapability is reviewed executable behavior, not discovery knowledge.
+// Only adapters owned by Devtize may implement these stable IDs.
+type CheckCapability struct {
+	ID         string      `json:"id" yaml:"id"`
+	ProviderID string      `json:"provider_id" yaml:"provider_id"`
+	Summary    string      `json:"summary" yaml:"summary"`
+	Risk       safety.Risk `json:"risk" yaml:"risk"`
+	Effect     string      `json:"effect" yaml:"effect"`
+}
+
+var builtinChecks = []CheckCapability{
+	{ID: "go.format.check", ProviderID: "go", Summary: "Verify Go source formatting", Risk: safety.RiskReadOnly, Effect: "reads tracked and nonignored Go source files"},
+	{ID: "go.test", ProviderID: "go", Summary: "Run Go tests", Risk: safety.RiskLocalWrite, Effect: "executes project test code and may write local caches"},
+	{ID: "go.vet", ProviderID: "go", Summary: "Run Go static analysis", Risk: safety.RiskLocalWrite, Effect: "loads project packages and may write local caches"},
+	{ID: "go.build", ProviderID: "go", Summary: "Build Go packages", Risk: safety.RiskLocalWrite, Effect: "compiles project packages and may write local caches"},
+}
+
+func BuiltinChecks() []CheckCapability {
+	return append([]CheckCapability(nil), builtinChecks...)
+}
+
+func CheckByID(id string) (CheckCapability, bool) {
+	for _, capability := range builtinChecks {
+		if capability.ID == id {
+			return capability, true
+		}
+	}
+	return CheckCapability{}, false
+}
+
+func ValidateCheckIDs(ids []string) error {
+	if len(ids) > 16 {
+		return fmt.Errorf("checks.ship supports at most 16 capability IDs")
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := CheckByID(id); !ok {
+			return fmt.Errorf("unknown ship check capability %q", id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("duplicate ship check capability %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
 func NewCatalog(commands []CommandKnowledge) (*Catalog, error) {
 	seen := make(map[string]struct{}, len(commands))
 	copyCommands := append([]CommandKnowledge(nil), commands...)

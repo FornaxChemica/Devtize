@@ -23,6 +23,8 @@ type CommitOptions struct {
 	Conventional bool
 	DryRun       bool
 	PlanJSON     bool
+	WorkflowID   string
+	Workflow     string
 }
 
 type CommitSelection struct {
@@ -160,10 +162,22 @@ func (s CommitService) ExecutePlanned(ctx context.Context, options CommitOptions
 	if err := s.validateCurrentPlan(ctx, response); err != nil {
 		return response, err
 	}
-	result := operation.ExecutionResult{SchemaVersion: 1, PlanID: response.Plan.ID, PlanDigest: response.Plan.Digest, Status: operation.StatusRunning}
-	stageOp := response.Plan.Operations[0]
+	return s.executeValidated(ctx, options, response, nil)
+}
+
+func (s CommitService) executeValidated(ctx context.Context, options CommitOptions, response CommitResponse, initialSteps []operation.StepResult) (CommitResponse, error) {
+	s = s.withDefaults()
+	stageOp, stageOK := operationByCapability(response.Plan, "git.index.stage")
+	commitOp, commitOK := operationByCapability(response.Plan, "git.commit.create")
+	if !stageOK || !commitOK {
+		return response, &Error{Code: CodePlanInvalid, Message: "commit plan is missing required operations"}
+	}
+	result := operation.ExecutionResult{
+		SchemaVersion: 1, PlanID: response.Plan.ID, PlanDigest: response.Plan.Digest,
+		Status: operation.StatusRunning, Steps: append([]operation.StepResult(nil), initialSteps...),
+	}
 	stageStep := operation.StepResult{OperationID: stageOp.ID, CapabilityID: stageOp.CapabilityID, Summary: stageOp.Summary, Status: operation.StatusRunning, StartedAt: s.now()}
-	err = s.Git.Stage(ctx, gitadapter.StageInput{ProjectRoot: response.Plan.ProjectRoot, Paths: response.Selection.Paths})
+	err := s.Git.Stage(ctx, gitadapter.StageInput{ProjectRoot: response.Plan.ProjectRoot, Paths: response.Selection.Paths})
 	stageStep.FinishedAt = s.now()
 	if err != nil {
 		stageStep.Status = operation.StatusFailed
@@ -180,7 +194,6 @@ func (s CommitService) ExecutePlanned(ctx context.Context, options CommitOptions
 	stageStep.Status = operation.StatusSucceeded
 	result.Steps = append(result.Steps, stageStep)
 
-	commitOp := response.Plan.Operations[1]
 	commitStep := operation.StepResult{OperationID: commitOp.ID, CapabilityID: commitOp.CapabilityID, Summary: commitOp.Summary, Status: operation.StatusRunning, StartedAt: s.now()}
 	err = s.Git.CreateCommit(ctx, gitadapter.CommitInput{ProjectRoot: response.Plan.ProjectRoot, Message: stringInput(commitOp, "message")})
 	commitStep.FinishedAt = s.now()
@@ -235,7 +248,11 @@ func (s CommitService) validateCurrentPlan(ctx context.Context, response CommitR
 	if response.Selection.Mode == "disclosed_all_changes" && !equalStringSlices(uniqueSorted(allChangedPaths(changes)), response.Selection.Paths) {
 		return &Error{Code: CodePreconditionFailed, Message: "repository changes differ from the disclosed all-files plan", Hint: "No mutation was performed. Build and review a fresh commit plan."}
 	}
-	expected := stringMapInput(response.Plan.Operations[0], "content_digests")
+	stageOp, ok := operationByCapability(response.Plan, "git.index.stage")
+	if !ok {
+		return &Error{Code: CodePlanInvalid, Message: "commit plan is missing the staging operation"}
+	}
+	expected := stringMapInput(stageOp, "content_digests")
 	current, err := fileDigests(response.Plan.ProjectRoot, response.Selection.Paths)
 	if err != nil || !equalStringMaps(expected, current) {
 		return &Error{Code: CodePreconditionFailed, Message: "selected file content changed after planning", Cause: err, Hint: "No mutation was performed. Build and review a fresh commit plan."}
@@ -353,12 +370,25 @@ func (s CommitService) writeHistory(response CommitResponse, result operation.Ex
 	if !s.Config.History.Enabled {
 		return nil
 	}
+	workflow := options.Workflow
+	if workflow == "" {
+		workflow = "commit"
+	}
 	return s.History.Append(history.Record{
-		SchemaVersion: 1, ExecutionID: "exec_" + s.now().Format("20060102150405"), PlanID: response.Plan.ID,
+		SchemaVersion: 1, WorkflowID: options.WorkflowID, ExecutionID: "exec_" + s.now().Format("20060102150405"), PlanID: response.Plan.ID,
 		PlanDigest: response.Plan.Digest, StartedAt: response.Plan.CreatedAt, FinishedAt: s.now(),
-		Invocation: map[string]any{"workflow": "commit", "selection_mode": response.Selection.Mode, "conventional": options.Conventional},
+		Invocation: map[string]any{"workflow": workflow, "selection_mode": response.Selection.Mode, "conventional": options.Conventional},
 		Project:    map[string]string{"root": response.Plan.ProjectRoot}, Status: result.Status, Steps: result.Steps, RecoveryHints: result.RecoveryHints,
 	})
+}
+
+func operationByCapability(plan operation.Plan, capabilityID string) (operation.Operation, bool) {
+	for _, op := range plan.Operations {
+		if op.CapabilityID == capabilityID {
+			return op, true
+		}
+	}
+	return operation.Operation{}, false
 }
 
 func (s CommitService) withDefaults() CommitService {

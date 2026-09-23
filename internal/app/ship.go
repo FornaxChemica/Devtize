@@ -19,9 +19,10 @@ import (
 const maxShipCommits = 100
 
 type ShipOptions struct {
-	Remote   string
-	DryRun   bool
-	PlanJSON bool
+	Remote     string
+	DryRun     bool
+	PlanJSON   bool
+	WorkflowID string
 }
 
 type ShipResponse struct {
@@ -182,6 +183,7 @@ func (s ShipService) ExecutePlanned(ctx context.Context, options ShipOptions, pr
 		result.Status = operation.StatusCancelled
 		result.RecoveryHints = []string{"No push was attempted. Rerun dvz ship to build a fresh plan."}
 		response.Result = result
+		_ = s.writeHistory(response, result, options)
 		return response, &Error{Code: CodeConfirmationDeclined, Message: "confirmation declined", Hint: result.RecoveryHints[0]}
 	}
 	if err := s.validateCurrentPlan(ctx, op, response); err != nil {
@@ -200,7 +202,7 @@ func (s ShipService) ExecutePlanned(ctx context.Context, options ShipOptions, pr
 		result.Steps = append(result.Steps, step)
 		result.RecoveryHints = []string{step.RecoveryHint}
 		response.Result = result
-		_ = s.writeHistory(response, result)
+		_ = s.writeHistory(response, result, options)
 		return response, &Error{Code: CodePartialExecution, Message: step.ErrorMessage, Cause: err, Hint: step.RecoveryHint}
 	}
 	step.Status = operation.StatusSucceeded
@@ -213,7 +215,7 @@ func (s ShipService) ExecutePlanned(ctx context.Context, options ShipOptions, pr
 		hint := "Inspect local HEAD, its upstream, and the live remote branch before retrying; Devtize will not force-push."
 		result.RecoveryHints = []string{hint}
 		response.Result = result
-		_ = s.writeHistory(response, result)
+		_ = s.writeHistory(response, result, options)
 		return response, &Error{Code: CodePostconditionFailed, Message: "ship postconditions were not satisfied", Cause: errors.Join(remoteErr, stateErr), Hint: hint}
 	}
 	result.Status = operation.StatusSucceeded
@@ -221,7 +223,7 @@ func (s ShipService) ExecutePlanned(ctx context.Context, options ShipOptions, pr
 	response.Git = state
 	response.RemoteCommit = remoteCommit
 	response.Result = result
-	if err := s.writeHistory(response, result); err != nil {
+	if err := s.writeHistory(response, result, options); err != nil {
 		return response, &Error{Code: CodeHistoryWriteFailed, Message: "history could not be written", Cause: err}
 	}
 	return response, nil
@@ -285,12 +287,12 @@ func commitSummariesInput(op operation.Operation, name string) []gitadapter.Comm
 	}
 }
 
-func (s ShipService) writeHistory(response ShipResponse, result operation.ExecutionResult) error {
+func (s ShipService) writeHistory(response ShipResponse, result operation.ExecutionResult, options ShipOptions) error {
 	if !s.Config.History.Enabled {
 		return nil
 	}
 	return s.History.Append(history.Record{
-		SchemaVersion: 1, ExecutionID: "exec_" + s.now().Format("20060102150405"), PlanID: response.Plan.ID,
+		SchemaVersion: 1, WorkflowID: options.WorkflowID, ExecutionID: "exec_" + s.now().Format("20060102150405"), PlanID: response.Plan.ID,
 		PlanDigest: response.Plan.Digest, StartedAt: response.Plan.CreatedAt, FinishedAt: s.now(),
 		Invocation: map[string]any{"workflow": "ship", "remote": response.RemoteName}, Project: map[string]string{"root": response.Plan.ProjectRoot},
 		Status: result.Status, Steps: result.Steps, RecoveryHints: result.RecoveryHints,

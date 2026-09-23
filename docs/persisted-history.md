@@ -8,7 +8,7 @@ mutation.
 
 ## Record Schema
 
-Persisted records use schema version 1 and contain execution and plan IDs, the
+Persisted records use schema version 1 and contain execution and plan IDs, an optional workflow ID, the
 plan digest, start and finish timestamps, redacted invocation metadata, a
 project identifier, execution status, typed step results, and recovery hints.
 They do not contain full diffs, repository contents, environment dumps, model
@@ -16,7 +16,7 @@ prompts, or unbounded process output.
 
 New records include a stable `workflow` value in invocation metadata. Readers
 derive known workflows from legacy plan-ID prefixes when that field is absent.
-Adding this optional field does not change the persisted schema version.
+Composed ship uses the optional `workflow_id` field to correlate its local and remote plans. Adding these optional fields does not change the persisted schema version.
 
 ## Reading And Redaction
 

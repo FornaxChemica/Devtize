@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ func TestLoadDefaultsWhenFilesAreMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Config != Defaults() || len(result.Sources) != 0 {
+	if !reflect.DeepEqual(result.Config, Defaults()) || len(result.Sources) != 0 {
 		t.Fatalf("unexpected defaults: %#v", result)
 	}
 }
@@ -39,6 +40,26 @@ func TestLoadPrecedence(t *testing.T) {
 	wantSources := 4
 	if len(result.Sources) != wantSources {
 		t.Fatalf("sources = %#v, want %d layers", result.Sources, wantSources)
+	}
+}
+
+func TestLoadShipChecksReplaceByLayerAndValidate(t *testing.T) {
+	working := t.TempDir()
+	user := t.TempDir()
+	writeConfig(t, filepath.Join(user, "devtize", "config.yaml"), "version: 1\nchecks:\n  ship: [go.test]\n")
+	writeConfig(t, filepath.Join(working, ".dvz.yaml"), "version: 1\nchecks:\n  ship: [go.format.check, go.vet]\n")
+	result, err := Load(LoadOptions{WorkingDir: working, Environment: map[string]string{}, UserConfigDir: func() (string, error) { return user, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"go.format.check", "go.vet"}
+	if !reflect.DeepEqual(result.Config.Checks.Ship, want) {
+		t.Fatalf("checks = %#v, want %#v", result.Config.Checks.Ship, want)
+	}
+
+	writeConfig(t, filepath.Join(working, ".dvz.yaml"), "version: 1\nchecks:\n  ship: [shell.anything]\n")
+	if _, err := Load(LoadOptions{WorkingDir: working, Environment: map[string]string{}, UserConfigDir: func() (string, error) { return user, nil }}); err == nil || !strings.Contains(err.Error(), "unknown ship check") {
+		t.Fatalf("unknown check was accepted: %v", err)
 	}
 }
 

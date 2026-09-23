@@ -281,6 +281,95 @@ func TestBuiltBinaryShipDryRunAndPushToLocalBareRemote(t *testing.T) {
 	}
 }
 
+func TestBuiltBinaryComposedShipRunsChecksCommitsAndPushes(t *testing.T) {
+	root := filepath.Clean("..")
+	binary := filepath.Join(t.TempDir(), "dvz")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dvz")
+	build.Dir = root
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dvz: %v\n%s", err, output)
+	}
+
+	repo := t.TempDir()
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", bare)
+	runGit(t, repo, "init", "--initial-branch", "main")
+	runGit(t, repo, "config", "user.name", "Devtize Test")
+	runGit(t, repo, "config", "user.email", "devtize-test@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "--", "README.md")
+	runGit(t, repo, "commit", "--message", "chore: initial fixture")
+	runGit(t, repo, "remote", "add", "origin", bare)
+	runGit(t, repo, "push", "--set-upstream", "origin", "main")
+	remoteBefore := strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main"))
+
+	files := map[string]string{
+		"go.mod":       "module example.invalid/fixture\n\ngo 1.27.0\n",
+		"main.go":      "package fixture\n\nfunc Sum(a, b int) int { return a + b }\n",
+		"main_test.go": "package fixture\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {\n\tif Sum(2, 3) != 5 {\n\t\tt.Fatal(\"sum\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	configHome := t.TempDir()
+	dryArgs := []string{
+		"--json", "ship", "go.mod", "main.go", "main_test.go", "--message", "feat: add checked fixture", "--dry-run",
+		"--check", "go.format.check", "--check", "go.test", "--check", "go.vet", "--check", "go.build",
+	}
+	dryRun := exec.Command(binary, dryArgs...)
+	dryRun.Dir = repo
+	dryRun.Env = append(os.Environ(), "HOME="+configHome, "XDG_CONFIG_HOME="+configHome, "GOCACHE="+filepath.Join(configHome, "go-cache"), "NO_COLOR=1")
+	dryOutput, err := dryRun.CombinedOutput()
+	if err != nil {
+		t.Fatalf("composed ship dry-run: %v\n%s", err, dryOutput)
+	}
+	var dryResponse struct {
+		SchemaVersion int    `json:"schema_version"`
+		Mode          string `json:"mode"`
+		Push          any    `json:"push"`
+	}
+	if err := json.Unmarshal(dryOutput, &dryResponse); err != nil || dryResponse.SchemaVersion != 1 || dryResponse.Mode != "compose" || dryResponse.Push != nil || strings.Contains(string(dryOutput), "\x1b[") {
+		t.Fatalf("dry response=%#v err=%v output=%s", dryResponse, err, dryOutput)
+	}
+	if strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")) != remoteBefore || strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main")) != remoteBefore {
+		t.Fatal("composed dry-run mutated local or remote HEAD")
+	}
+
+	command := exec.Command(binary,
+		"ship", "go.mod", "main.go", "main_test.go", "--message", "feat: add checked fixture",
+		"--check", "go.format.check", "--check", "go.test", "--check", "go.vet", "--check", "go.build",
+	)
+	command.Dir = repo
+	command.Env = append(os.Environ(), "HOME="+configHome, "XDG_CONFIG_HOME="+configHome, "GOCACHE="+filepath.Join(configHome, "go-cache"), "NO_COLOR=1")
+	command.Stdin = strings.NewReader("commit\npush\n")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("composed ship: %v\n%s", err, output)
+	}
+	text := string(output)
+	for _, expected := range []string{"go.format.check", "go.test", "go.vet", "go.build", "git.commit.create", "git.branch.push"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("output missing %q:\n%s", expected, text)
+		}
+	}
+	head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	if head == remoteBefore || strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main")) != head {
+		t.Fatalf("composed ship did not push exact created commit; before=%s head=%s", remoteBefore, head)
+	}
+	if message := strings.TrimSpace(runGit(t, repo, "log", "-1", "--format=%s")); message != "feat: add checked fixture" {
+		t.Fatalf("message = %q", message)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", args...)

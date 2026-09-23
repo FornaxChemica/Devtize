@@ -18,6 +18,7 @@ const (
 	CodePreconditionFailed     ErrorCode = "PRECONDITION_FAILED"
 	CodeProcessTimeout         ErrorCode = "PROCESS_TIMEOUT"
 	CodeProcessFailed          ErrorCode = "PROCESS_FAILED"
+	CodeCheckFailed            ErrorCode = "CHECK_FAILED"
 	CodePartialExecution       ErrorCode = "PARTIAL_EXECUTION"
 	CodeAIUnavailable          ErrorCode = "AI_UNAVAILABLE"
 	CodeAIOutputInvalid        ErrorCode = "AI_OUTPUT_INVALID"

@@ -23,6 +23,7 @@ type HistoryOptions struct {
 
 type HistoryEntry struct {
 	SchemaVersion int                    `json:"schema_version"`
+	WorkflowID    string                 `json:"workflow_id,omitempty"`
 	ExecutionID   string                 `json:"execution_id"`
 	Workflow      string                 `json:"workflow"`
 	ProjectRoot   string                 `json:"project_root,omitempty"`
@@ -100,7 +101,7 @@ func historyEntry(record history.Record) HistoryEntry {
 	steps := append([]operation.StepResult{}, record.Steps...)
 	hints := append([]string{}, record.RecoveryHints...)
 	return HistoryEntry{
-		SchemaVersion: record.SchemaVersion, ExecutionID: record.ExecutionID, Workflow: historyWorkflow(record),
+		SchemaVersion: record.SchemaVersion, WorkflowID: record.WorkflowID, ExecutionID: record.ExecutionID, Workflow: historyWorkflow(record),
 		ProjectRoot: record.Project["root"], PlanID: record.PlanID, PlanDigest: record.PlanDigest,
 		StartedAt: record.StartedAt, FinishedAt: record.FinishedAt, Status: record.Status,
 		Steps: steps, RecoveryHints: hints,

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1027,8 +1026,8 @@ func containsString(values []string, target string) bool {
 }
 
 type confirmationReader struct {
-	scanner *bufio.Scanner
-	writer  io.Writer
+	reader io.Reader
+	writer io.Writer
 }
 
 func newConfirmationReader(reader io.Reader, writer io.Writer) confirmationReader {
@@ -1038,18 +1037,37 @@ func newConfirmationReader(reader io.Reader, writer io.Writer) confirmationReade
 	if reader == nil {
 		return confirmationReader{writer: writer}
 	}
-	return confirmationReader{scanner: bufio.NewScanner(reader), writer: writer}
+	return confirmationReader{reader: reader, writer: writer}
 }
 
 func (c confirmationReader) confirm(label, digest, expected string) (bool, error) {
-	if c.scanner == nil {
+	if c.reader == nil {
 		return false, nil
 	}
 	fmt.Fprintf(c.writer, "%s for plan %s? Type %s to continue: ", label, digest, expected)
-	if !c.scanner.Scan() {
-		return false, c.scanner.Err()
+	var line []byte
+	buffer := make([]byte, 1)
+	for len(line) <= 4096 {
+		count, err := c.reader.Read(buffer)
+		if count == 1 {
+			if buffer[0] == '\n' {
+				break
+			}
+			if buffer[0] != '\r' {
+				line = append(line, buffer[0])
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) && len(line) > 0 {
+				break
+			}
+			return false, err
+		}
 	}
-	answer := strings.TrimSpace(strings.ToLower(c.scanner.Text()))
+	if len(line) > 4096 {
+		return false, errors.New("confirmation input exceeds 4096 bytes")
+	}
+	answer := strings.TrimSpace(strings.ToLower(string(line)))
 	return answer == expected, nil
 }
 

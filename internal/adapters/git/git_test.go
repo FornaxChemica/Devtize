@@ -52,6 +52,20 @@ func TestStageUsesLiteralPathArgumentsAfterSeparator(t *testing.T) {
 	}
 }
 
+func TestListVisibleFilesUsesNULDelimitedReviewedInventory(t *testing.T) {
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: "z.go\x00a b;$HOME.go\x00"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	paths, err := adapter.ListVisibleFiles(context.Background(), "/tmp/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"a b;$HOME.go", "z.go"}
+	wantArgs := []string{"ls-files", "-co", "--exclude-standard", "-z"}
+	if !reflect.DeepEqual(paths, wantPaths) || !reflect.DeepEqual(runner.specs[0].Args, wantArgs) {
+		t.Fatalf("paths=%#v args=%#v", paths, runner.specs[0].Args)
+	}
+}
+
 func TestPushNeverUsesForce(t *testing.T) {
 	runner := &fakeRunner{}
 	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}

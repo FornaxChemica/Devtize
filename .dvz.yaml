@@ -1,0 +1,7 @@
+version: 1
+checks:
+  ship:
+    - go.format.check
+    - go.test
+    - go.vet
+    - go.build

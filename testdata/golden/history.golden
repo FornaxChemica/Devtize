@@ -1,4 +1,4 @@
-history scope: project
+- History: project
 project: /work/project
 recording enabled: true
 records (1):
@@ -6,4 +6,4 @@ records (1):
     execution: exec_1
     plan: plan_commit_1 (sha256:test)
     step: git.commit.create succeeded
-more records available; increase --limit up to 200
+next: more records are available; increase --limit up to 200

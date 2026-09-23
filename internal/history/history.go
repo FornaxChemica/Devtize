@@ -22,6 +22,7 @@ var ErrInvalid = errors.New("invalid history")
 
 type Record struct {
 	SchemaVersion int                    `json:"schema_version"`
+	WorkflowID    string                 `json:"workflow_id,omitempty"`
 	ExecutionID   string                 `json:"execution_id"`
 	PlanID        string                 `json:"plan_id"`
 	PlanDigest    string                 `json:"plan_digest"`

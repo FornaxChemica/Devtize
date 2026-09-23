@@ -1,0 +1,20 @@
+! Repository status: dirty
+project: /workspace/Devtize
+repository: initialized
+branch: main
+HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+working tree: dirty
+upstream: origin/main
+relation: ahead (ahead 2, behind 0)
+remote origin: https://github.com/FornaxChemica/Devtize.git
+staged: none
+unstaged (1):
+  - internal/app/ship_workflow.go
+untracked (1):
+  - internal/ui/renderer.go
+ignored paths: 1
+warning: The index is unchanged, but the working tree
+         contains reviewed implementation work.
+next: Run dvz ship with explicit paths and a reviewed
+      Conventional Commit message when these changes are
+      ready.

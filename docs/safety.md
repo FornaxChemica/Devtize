@@ -4,7 +4,7 @@ Phase C keeps the existing read-only and repository behavior and adds focused da
 
 ## Process Boundary
 
-All subprocesses use an executable and argument slice, an explicit working directory, timeout, disabled stdin, a narrow environment, bounded output capture, and redaction values. The runner uses `exec.CommandContext` directly. Shell interpreters and command strings are prohibited. Git staging uses `git add -- <path>...`; initial push uses `git push --set-upstream`, and daily ship uses a full source/destination branch refspec. Neither path exposes force options. Errors do not reproduce full command lines or environment values.
+All subprocesses use an executable and argument slice, an explicit working directory, timeout, disabled stdin, a narrow environment, bounded output capture, and redaction values. The runner uses `exec.CommandContext` directly. Shell interpreters and command strings are prohibited. Git staging uses `git add -- <path>...`; initial push uses `git push --set-upstream`, and daily ship uses a full source/destination branch refspec. Project checks use only reviewed `go` and `gofmt` argument arrays. No path exposes arbitrary shell text or force options. Errors do not reproduce full command lines or environment values.
 
 ## Sensitive Data
 
@@ -26,7 +26,9 @@ Dry-run performs planning and validation only. Tests assert zero mutation adapte
 
 `dvz commit` refuses a detached branch, existing staged content, ignored paths, unchanged paths, traversal, invalid messages, stale `HEAD`, or changed selected-file content. It requires the exact response `commit` against the rendered plan digest. If commit creation fails after staging, Devtize leaves the disclosed paths staged, records partial completion, and tells the user to inspect the index; it never guesses a destructive cleanup.
 
-The push-only `dvz ship` slice requires an attached branch with an exact configured upstream and one remote URL. It compares the live remote SHA to the local remote-tracking SHA, proves that SHA is an ancestor of local `HEAD`, discloses every outgoing commit and dirty path excluded from the push, and rechecks all of that around the digest-bound `push` confirmation. The adapter uses a full branch refspec and has no force option. A process failure is treated as an uncertain remote outcome and recovered through a fresh live inspection.
+Push-only `dvz ship` requires an attached branch with an exact configured upstream and one remote URL. It compares the live remote SHA to the local remote-tracking SHA, proves that SHA is an ancestor of local `HEAD`, discloses every outgoing commit and dirty path excluded from the push, and rechecks all of that around the digest-bound `push` confirmation. The adapter uses a full branch refspec and has no force option.
+
+Composed ship accepts only reviewed check IDs. `go test`, `go vet`, and `go build` are classified `local_write` because project code is untrusted and tool execution may write caches or cause project-defined effects. `go.format.check` enumerates tracked and nonignored untracked files with NUL-delimited Git output and passes literal paths to `gofmt -l` in bounded batches. Checks have disabled stdin, fixed timeouts, a one-MiB diagnostic tail, a narrow environment, and no rollback promise. Failure stops before staging. Repository and file inventories are revalidated after checks.
 
 `dvz status` invokes only repository, change, relation, and optional remote-branch reads. It never stages, fetches, pulls, rebases, resets, or writes refs. When a live SHA differs from local tracking state, Devtize reports stale tracking and does not infer ancestry from an object it has not fetched.
 

@@ -1,6 +1,6 @@
 # Architecture
 
-Phase C builds on the Phase A read-only paths and Phase B repository workflows with daily commit, push-only ship, status, and history commands:
+Phase C builds on the Phase A read-only paths and Phase B repository workflows with daily commit, composed ship, status, and history commands:
 
 ```text
 cmd/dvz -> internal/app -> internal/search -> internal/registry -> registry/builtin
@@ -8,10 +8,12 @@ cmd/dvz -> internal/app -> internal/detect -> internal/process -> git or gh
 cmd/dvz -> internal/app -> internal/operation -> internal/safety
 cmd/dvz -> internal/app -> internal/adapters/git -> internal/process -> git
 cmd/dvz -> internal/app -> internal/adapters/github -> internal/process -> gh
+cmd/dvz -> internal/ui
+internal/app -> internal/adapters/golang -> internal/process -> go or gofmt
 cmd/dvz -> internal/app -> internal/history
 ```
 
-`cmd/dvz` owns Cobra wiring, output streams, JSON encoding, and process exit codes. Application services coordinate typed requests and responses without importing Cobra. Registry entries are reviewed discovery metadata. Search is deterministic and has no process dependency. Detection owns project evidence and tool-version interpretation. `internal/process` is the only general subprocess boundary.
+`cmd/dvz` owns Cobra wiring, output streams, JSON encoding, and process exit codes. `internal/ui` owns adaptive human rendering and has no process access. Application services coordinate typed requests and responses without importing Cobra. Registry entries are reviewed discovery metadata or a closed set of executable check capabilities. Search is deterministic and has no process dependency. Detection owns project evidence and tool-version interpretation. `internal/process` is the only general subprocess boundary.
 
 Configuration is loaded before command behavior and is passed as typed state. Domain packages do not import Cobra. The focused `CommitService` reuses operation, history, safety, and Git adapter boundaries without introducing a generic workflow DSL. `raw`, TUI, MCP, and a broad workflow catalog remain absent.
 
@@ -27,4 +29,4 @@ The one-file `repo redact-initial` remediation uses the same application, plan, 
 
 `dvz commit` plans from an attached branch and clean index, discloses exact changed paths and content digests, revalidates them after confirmation, stages only those paths, and verifies the new `HEAD` and message. Existing staged content is rejected so an undisclosed path cannot enter the commit.
 
-The first `dvz ship` slice is a separate `ShipService`. It reads local and live remote state, proves fast-forward ancestry, binds the exact outgoing commit list and excluded dirty paths into the plan, and delegates one reviewed non-force push to the Git adapter. It does not compose commit creation or checks yet.
+`ShipService` retains the compatible push-only path. `ShipWorkflowService` first binds reviewed check IDs, toolchain identity, selected paths, content digests, and the inspected remote boundary into one local plan. It executes checks before staging and revalidates repository state afterward. Because a commit SHA cannot be predicted safely, the service creates a second exact push plan only after commit postconditions pass. Both plans share a workflow ID but require independent digest-bound confirmations.

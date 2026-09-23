@@ -41,3 +41,21 @@ func TestCatalogRejectsIncompleteKnowledge(t *testing.T) {
 		t.Fatal("catalog accepted provenance without a digest")
 	}
 }
+
+func TestBuiltinChecksAreClosedAndRiskClassified(t *testing.T) {
+	checks := registry.BuiltinChecks()
+	if len(checks) != 4 {
+		t.Fatalf("checks = %d, want 4", len(checks))
+	}
+	for _, check := range checks {
+		if check.ID == "" || check.ProviderID != "go" || !check.Risk.Valid() || check.Effect == "" {
+			t.Fatalf("invalid check: %#v", check)
+		}
+	}
+	if err := registry.ValidateCheckIDs([]string{"go.test", "go.test"}); err == nil {
+		t.Fatal("duplicate checks accepted")
+	}
+	if err := registry.ValidateCheckIDs([]string{"go.test", "shell.command"}); err == nil {
+		t.Fatal("unknown check accepted")
+	}
+}

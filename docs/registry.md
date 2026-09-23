@@ -26,7 +26,9 @@ These capabilities are available only through the typed `dvz repo` application p
 
 Phase C reuses the reviewed `git.index.stage` and `git.commit.create` capabilities through `dvz commit`. That path requires a clean index, exact changed-path disclosure, content digests, Conventional Commit validation by default, and postcondition verification. It does not make command knowledge executable.
 
-The first `dvz ship` slice reuses `git.branch.push` only after live remote inspection, fast-forward ancestry verification, exact outgoing-commit disclosure, and remote-write confirmation. Its adapter uses `git push <remote> refs/heads/<branch>:refs/heads/<branch>` and cannot request force.
+`dvz ship` reuses `git.branch.push` only after live remote inspection, fast-forward ancestry verification, exact outgoing-commit disclosure, and remote-write confirmation. Its adapter uses `git push <remote> refs/heads/<branch>:refs/heads/<branch>` and cannot request force.
+
+Phase C adds four reviewed executable check capabilities: `go.format.check`, `go.test`, `go.vet`, and `go.build`. They are source-owned definitions with fixed adapter bindings, arguments, risks, effects, timeouts, and output bounds. Configuration may select these IDs but cannot supply executable names, arguments, environment values, or shell text. Unknown and duplicate IDs are rejected.
 
 `dvz status` uses reviewed read-only adapter methods for repository state, exact change categories, local tracking relation, and optional live branch inspection. The live check is explicit, invokes `git ls-remote --heads`, and never fetches. `dvz history` does not execute provider commands.
 

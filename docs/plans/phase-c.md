@@ -212,11 +212,18 @@ retry path without destructive cleanup.
 - Normalize daily status separately from the Phase B bootstrap status.
 - Render bounded, redacted, versioned history records.
 
-### 8. [ ] Implement `ship`
+### 8. [x] Implement `ship`
 
-- Plan checks, commit, push, and optional PR boundaries.
+- Plan reviewed checks, commit, and push as separate immutable local and remote boundaries.
 - Stop on failed checks and require separate remote confirmation.
 - Verify live remote state before push and on resume.
+- Preserve push-only JSON compatibility and leave PR creation for a future dedicated boundary.
+
+### 8.2. [x] Add Polished Deterministic Terminal UX
+
+- Render detailed plans, status, history, progress, results, and errors through `internal/ui`.
+- Adapt color, symbols, and wrapping to TTY capabilities with ASCII and no-color fallbacks.
+- Keep JSON ANSI-free and cover 60, 80, and 120 column layouts with goldens.
 
 ### 8.1. [x] Implement And Dogfood Push-Only `ship`
 
@@ -253,3 +260,24 @@ retry path without destructive cleanup.
 - [x] Full tests, race tests, vet, formatting, and build pass.
 - [x] Devtize can create its next commit while excluding every
   `docs/plans/*.md` file.
+
+## Composed Ship And Terminal UX Acceptance Criteria
+
+- [x] Push-only invocation and schema-version-1 JSON remain compatible.
+- [x] Composed ship discloses checks, selected paths, message, branch, remote,
+  risks, effects, and the deferred remote boundary.
+- [x] Only four reviewed Go check IDs are accepted; configuration cannot
+  provide executable names, arguments, environment values, or shell text.
+- [x] Check failure causes zero staging, commit, or remote-write calls.
+- [x] Local and remote mutation boundaries require separate digest-bound
+  `commit` and `push` confirmations.
+- [x] The exact push plan is created only after the commit SHA exists and fresh
+  live-remote inspection succeeds.
+- [x] Partial outcomes have correlated redacted history and deterministic
+  `dvz ship` recovery guidance.
+- [x] Human output has tested color/no-color, Unicode/ASCII, redirected, and
+  60/80/120-column behavior; JSON remains ANSI-free.
+- [x] Unit, integration, race, vet, formatting, build, and local-bare-remote
+  acceptance checks pass.
+- [x] PR creation, constrained undo, AI, TUI, MCP, provider sync, and arbitrary
+  execution remain outside this milestone.

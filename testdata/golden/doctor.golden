@@ -1,4 +1,4 @@
-Devtize doctor: warning
+! Devtize doctor: warning
 config: valid
 project: not found
 gh: installed 2.80.0; auth auth_unknown
