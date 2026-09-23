@@ -56,6 +56,28 @@ func TestDetailedLayoutWrapsAtConfiguredWidths(t *testing.T) {
 	}
 }
 
+func TestUndoLayoutFitsNarrowAndWideRedirectedOutput(t *testing.T) {
+	response := app.UndoResponse{
+		Eligibility: app.UndoUnavailable, RollbackKind: app.UndoUnavailable,
+		Source:      app.UndoSource{ExecutionID: "exec_fixture", Workflow: "commit", Status: "succeeded", PlanID: "plan_commit_fixture", PlanDigest: "sha256:fixture"},
+		Git:         app.UndoGitState{ProjectRoot: "/workspace/Devtize", Branch: "main", HeadCommit: strings.Repeat("a", 40), WorkingTree: "clean"},
+		Reasons:     []app.UndoReason{{Code: app.ReasonCommitPublished, Message: "The recorded commit is already the live upstream commit."}},
+		Limitations: []string{"Plan only; execution is not implemented in this milestone."},
+	}
+	for _, width := range []int{60, 80, 120} {
+		var output bytes.Buffer
+		New(&output, Options{Color: config.ColorAuto, Environment: map[string]string{}, Capabilities: &Capabilities{Width: width}}).Undo(response)
+		if strings.Contains(output.String(), "\x1b[") || !strings.HasSuffix(output.String(), "No changes were made.\n") {
+			t.Fatalf("width %d output=%q", width, output.String())
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n") {
+			if len([]rune(line)) > width {
+				t.Fatalf("width %d line has %d runes: %q", width, len([]rune(line)), line)
+			}
+		}
+	}
+}
+
 func sampleStatus() app.StatusResponse {
 	return app.StatusResponse{
 		ProjectRoot:        "/workspace/Devtize",

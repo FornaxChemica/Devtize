@@ -1098,8 +1098,9 @@ func (s RepoService) writeHistoryInvocation(response RepoResponse, result operat
 	if !s.Config.History.Enabled {
 		return nil
 	}
+	workflow, _ := invocation["workflow"].(string)
 	return s.History.Append(history.Record{
-		SchemaVersion: 1, ExecutionID: "exec_" + s.now().Format("20060102150405"), PlanID: response.Plan.ID,
+		SchemaVersion: 1, ExecutionID: history.ExecutionID(s.now(), response.Plan.Digest, workflow), PlanID: response.Plan.ID,
 		PlanDigest: response.Plan.Digest, StartedAt: response.Plan.CreatedAt, FinishedAt: s.now(),
 		Invocation: invocation, Project: map[string]string{"root": response.Plan.ProjectRoot},
 		Status: result.Status, Steps: result.Steps, RecoveryHints: result.RecoveryHints,

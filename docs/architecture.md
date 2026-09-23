@@ -1,6 +1,6 @@
 # Architecture
 
-Phase C builds on the Phase A read-only paths and Phase B repository workflows with daily commit, composed ship, status, and history commands:
+Phase C builds on the Phase A read-only paths and Phase B repository workflows with daily commit, composed ship, status, history, and constrained undo-planning commands:
 
 ```text
 cmd/dvz -> internal/app -> internal/search -> internal/registry -> registry/builtin
@@ -18,6 +18,8 @@ cmd/dvz -> internal/app -> internal/history
 Configuration is loaded before command behavior and is passed as typed state. Domain packages do not import Cobra. The focused `CommitService` reuses operation, history, safety, and Git adapter boundaries without introducing a generic workflow DSL. `raw`, TUI, MCP, and a broad workflow catalog remain absent.
 
 `StatusService` composes only reviewed Git reads. Local inspection and tracking relation are offline; optional live inspection uses `ls-remote` without fetching. `HistoryService` reads a bounded JSON Lines store through a narrow reader interface and exposes typed entries instead of persisted free-form maps. Neither service enters the mutation plan or confirmation path, and neither records its own read.
+
+`UndoService` performs an exact project-scoped history lookup, then treats the returned record as untrusted evidence. Only a registered compensation can be proposed, and only after live Git inspection proves the recorded commit is the current single-parent `HEAD` on the same branch with a clean worktree and no conflicting live upstream state. It returns a dry-run operation plan but has no executor or mutation adapter method.
 
 ## Trust Boundary
 

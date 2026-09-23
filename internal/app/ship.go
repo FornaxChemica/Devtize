@@ -292,7 +292,7 @@ func (s ShipService) writeHistory(response ShipResponse, result operation.Execut
 		return nil
 	}
 	return s.History.Append(history.Record{
-		SchemaVersion: 1, WorkflowID: options.WorkflowID, ExecutionID: "exec_" + s.now().Format("20060102150405"), PlanID: response.Plan.ID,
+		SchemaVersion: 1, WorkflowID: options.WorkflowID, ExecutionID: history.ExecutionID(s.now(), response.Plan.Digest, "ship"), PlanID: response.Plan.ID,
 		PlanDigest: response.Plan.Digest, StartedAt: response.Plan.CreatedAt, FinishedAt: s.now(),
 		Invocation: map[string]any{"workflow": "ship", "remote": response.RemoteName}, Project: map[string]string{"root": response.Plan.ProjectRoot},
 		Status: result.Status, Steps: result.Steps, RecoveryHints: result.RecoveryHints,

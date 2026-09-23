@@ -358,3 +358,41 @@ func TestInspectRepoPreservesMissingExecutableFailure(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestInspectCommitParentsUsesValidatedLiteralCommit(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	parent := strings.Repeat("b", 40)
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: commit + " " + parent + "\n"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	parents, err := adapter.InspectCommitParents(context.Background(), "/tmp/project", commit)
+	if err != nil || !reflect.DeepEqual(parents, []string{parent}) {
+		t.Fatalf("parents=%#v err=%v", parents, err)
+	}
+	want := []string{"rev-list", "--parents", "-n", "1", commit, "--"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) || runner.specs[0].Stdin != devprocess.StdinDisabled {
+		t.Fatalf("spec=%#v", runner.specs[0])
+	}
+	unsafeRunner := &fakeRunner{}
+	_, err = (Adapter{Runner: unsafeRunner}).InspectCommitParents(context.Background(), "/tmp/project", "HEAD; reset --hard")
+	if err == nil || len(unsafeRunner.specs) != 0 {
+		t.Fatalf("unsafe commit reached runner: err=%v specs=%#v", err, unsafeRunner.specs)
+	}
+}
+
+func TestInspectUpstreamTargetUsesTypedReadOnlyRefQuery(t *testing.T) {
+	runner := &fakeRunner{out: devprocess.CommandResult{Stdout: "origin\x00refs/heads/main\x00\n"}}
+	adapter := Adapter{Runner: runner, Executable: "git", Timeout: time.Second}
+	target, err := adapter.InspectUpstreamTarget(context.Background(), "/tmp/project", "main")
+	if err != nil || !target.Configured || target.Remote != "origin" || target.Branch != "main" {
+		t.Fatalf("target=%#v err=%v", target, err)
+	}
+	want := []string{"for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)%00", "refs/heads/main"}
+	if !reflect.DeepEqual(runner.specs[0].Args, want) {
+		t.Fatalf("args=%#v", runner.specs[0].Args)
+	}
+	unsafeRunner := &fakeRunner{}
+	_, err = (Adapter{Runner: unsafeRunner}).InspectUpstreamTarget(context.Background(), "/tmp/project", "--format=evil")
+	if err == nil || len(unsafeRunner.specs) != 0 {
+		t.Fatalf("unsafe branch reached runner: err=%v specs=%#v", err, unsafeRunner.specs)
+	}
+}

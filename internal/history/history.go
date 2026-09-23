@@ -2,6 +2,8 @@ package history
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,18 +23,28 @@ const (
 var ErrInvalid = errors.New("invalid history")
 
 type Record struct {
-	SchemaVersion int                    `json:"schema_version"`
-	WorkflowID    string                 `json:"workflow_id,omitempty"`
-	ExecutionID   string                 `json:"execution_id"`
-	PlanID        string                 `json:"plan_id"`
-	PlanDigest    string                 `json:"plan_digest"`
-	StartedAt     time.Time              `json:"started_at"`
-	FinishedAt    time.Time              `json:"finished_at"`
-	Invocation    map[string]any         `json:"invocation,omitempty"`
-	Project       map[string]string      `json:"project,omitempty"`
-	Status        operation.Status       `json:"status"`
-	Steps         []operation.StepResult `json:"steps,omitempty"`
-	RecoveryHints []string               `json:"recovery_hints,omitempty"`
+	SchemaVersion   int                    `json:"schema_version"`
+	WorkflowID      string                 `json:"workflow_id,omitempty"`
+	ExecutionID     string                 `json:"execution_id"`
+	PlanID          string                 `json:"plan_id"`
+	PlanDigest      string                 `json:"plan_digest"`
+	StartedAt       time.Time              `json:"started_at"`
+	FinishedAt      time.Time              `json:"finished_at"`
+	Invocation      map[string]any         `json:"invocation,omitempty"`
+	Project         map[string]string      `json:"project,omitempty"`
+	Status          operation.Status       `json:"status"`
+	Steps           []operation.StepResult `json:"steps,omitempty"`
+	RecoveryHints   []string               `json:"recovery_hints,omitempty"`
+	ObservedChanges []ObservedChange       `json:"observed_changes,omitempty"`
+}
+
+type ObservedChange struct {
+	Kind         string `json:"kind"`
+	ProviderID   string `json:"provider_id"`
+	CapabilityID string `json:"capability_id"`
+	Branch       string `json:"branch"`
+	BeforeCommit string `json:"before_commit"`
+	AfterCommit  string `json:"after_commit"`
 }
 
 type Store struct {
@@ -48,6 +60,16 @@ type ListOptions struct {
 type ListResult struct {
 	Records []Record
 	HasMore bool
+}
+
+type FindOptions struct {
+	ProjectRoot string
+	ExecutionID string
+}
+
+func ExecutionID(now time.Time, planDigest, discriminator string) string {
+	sum := sha256.Sum256([]byte(planDigest + "\x00" + discriminator))
+	return "exec_" + now.UTC().Format("20060102150405") + "_" + hex.EncodeToString(sum[:6])
 }
 
 func (s Store) Append(record Record) error {
@@ -130,6 +152,58 @@ func (s Store) List(options ListOptions) (ListResult, error) {
 	return ListResult{Records: records, HasMore: hasMore}, nil
 }
 
+func (s Store) Find(options FindOptions) (Record, bool, error) {
+	if strings.TrimSpace(options.ExecutionID) == "" {
+		return Record{}, false, fmt.Errorf("%w: execution ID is required", ErrInvalid)
+	}
+	if s.Path == "" {
+		return Record{}, false, nil
+	}
+	file, err := os.Open(s.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return Record{}, false, nil
+	}
+	if err != nil {
+		return Record{}, false, fmt.Errorf("open history: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return Record{}, false, fmt.Errorf("inspect history: %w", err)
+	}
+	if info.Size() > MaxScanBytes {
+		return Record{}, false, fmt.Errorf("%w: history exceeds the %d byte read limit", ErrInvalid, MaxScanBytes)
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), MaxRecordBytes)
+	line := 0
+	var match Record
+	found := false
+	for scanner.Scan() {
+		line++
+		var record Record
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return Record{}, false, fmt.Errorf("%w: malformed record at line %d", ErrInvalid, line)
+		}
+		if record.SchemaVersion != 1 {
+			return Record{}, false, fmt.Errorf("%w: unsupported schema version %d at line %d", ErrInvalid, record.SchemaVersion, line)
+		}
+		if record.ExecutionID != options.ExecutionID || options.ProjectRoot != "" && filepath.Clean(record.Project["root"]) != filepath.Clean(options.ProjectRoot) {
+			continue
+		}
+		if found {
+			return Record{}, false, fmt.Errorf("%w: duplicate execution ID %q", ErrInvalid, options.ExecutionID)
+		}
+		match = redactRecord(record)
+		found = true
+	}
+	if err := scanner.Err(); err != nil {
+		return Record{}, false, fmt.Errorf("%w: record exceeds the %d byte read limit", ErrInvalid, MaxRecordBytes)
+	}
+	return match, found, nil
+}
+
 func redactRecord(record Record) Record {
 	record.Invocation = redactMap(record.Invocation)
 	if record.Project != nil {
@@ -151,6 +225,15 @@ func redactRecord(record Record) Record {
 	record.RecoveryHints = append([]string{}, record.RecoveryHints...)
 	for i := range record.RecoveryHints {
 		record.RecoveryHints[i] = Redact(record.RecoveryHints[i])
+	}
+	record.ObservedChanges = append([]ObservedChange{}, record.ObservedChanges...)
+	for i := range record.ObservedChanges {
+		record.ObservedChanges[i].Kind = Redact(record.ObservedChanges[i].Kind)
+		record.ObservedChanges[i].ProviderID = Redact(record.ObservedChanges[i].ProviderID)
+		record.ObservedChanges[i].CapabilityID = Redact(record.ObservedChanges[i].CapabilityID)
+		record.ObservedChanges[i].Branch = Redact(record.ObservedChanges[i].Branch)
+		record.ObservedChanges[i].BeforeCommit = Redact(record.ObservedChanges[i].BeforeCommit)
+		record.ObservedChanges[i].AfterCommit = Redact(record.ObservedChanges[i].AfterCommit)
 	}
 	return record
 }

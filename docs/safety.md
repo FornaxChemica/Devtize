@@ -12,6 +12,8 @@ Configuration accepts no credential fields. Diagnostics and history redact commo
 
 History is redacted both before append and after read because the local file is untrusted. Public history output uses typed fields and does not expose arbitrary persisted invocation or project maps. Reads reject unsupported schemas, records over one MiB, and files over 32 MiB instead of silently dropping data. `status` and `history` do not append audit entries for themselves.
 
+`dvz undo <execution-id> --dry-run` also treats history as untrusted. A source record can only locate typed `git.commit.created` evidence; it cannot supply a capability, executable, argument list, or authorization. Devtize independently verifies live branch, `HEAD`, parent, worktree, and configured upstream state. Legacy or ambiguous evidence produces an unavailable analysis. This milestone has no reset, restore, revert, push, confirmation, or history-write path.
+
 ## Risk Labels
 
 Risk metadata describes what a discovered command could do if a developer later runs it independently. A label does not authorize Devtize to execute the command. Potentially overwriting commands such as `git restore` are labeled destructive even though their exact effect depends on arguments.

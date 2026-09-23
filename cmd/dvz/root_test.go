@@ -90,7 +90,7 @@ func execute(t *testing.T, deps dependencies, args ...string) (string, string, e
 func TestHelpAndVersion(t *testing.T) {
 	runner := &spyRunner{}
 	stdout, _, err := execute(t, testDependencies(t, runner), "--help")
-	if err != nil || !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "find") || strings.Contains(stdout, "raw") {
+	if err != nil || !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "find") || !strings.Contains(stdout, "undo") || strings.Contains(stdout, "raw") {
 		t.Fatalf("help = %q, err = %v", stdout, err)
 	}
 	stdout, _, err = execute(t, testDependencies(t, runner), "version")
@@ -203,6 +203,14 @@ func TestShipPathsAndChecksRequireMessage(t *testing.T) {
 		if !errors.As(err, &operational) || operational.Code != app.CodeInvalidUsage {
 			t.Fatalf("dvz %v err=%v", args, err)
 		}
+	}
+}
+
+func TestUndoRequiresDryRunAtApplicationBoundary(t *testing.T) {
+	_, _, err := execute(t, testDependencies(t, &spyRunner{}), "undo", "exec_fixture")
+	var operational *app.Error
+	if !errors.As(err, &operational) || operational.Code != app.CodeInvalidUsage {
+		t.Fatalf("err=%#v", err)
 	}
 }
 
@@ -325,6 +333,33 @@ func TestGoldenCLIOutput(t *testing.T) {
 		}},
 	})
 	assertGolden(t, "history.golden", output.String())
+
+	output.Reset()
+	undoPlan := operation.Plan{
+		SchemaVersion: 1, ID: "plan_undo_20260923010203", Intent: "Plan local compensation for a verified Devtize-created commit",
+		CreatedAt: time.Date(2026, 9, 23, 1, 2, 3, 0, time.UTC), Digest: "sha256:undo", ProjectRoot: "/work/project", DryRun: true,
+		Operations: []operation.Operation{{
+			ID: "op_undo_uncommit", CapabilityID: "git.commit.uncommit_preserve_changes", ProviderID: "git", Risk: "local_write",
+			Summary: "Move the local branch to the verified parent while preserving working-tree content",
+			Effects: []operation.Effect{{Kind: "move_local_branch", Target: "main"}},
+			Inputs:  map[string]any{"execution_supported": false},
+		}},
+	}
+	undoResponse := app.UndoResponse{
+		SchemaVersion: 1, Status: operation.StatusValidated, Eligibility: app.UndoAvailable, RollbackKind: "compensating",
+		Source:      app.UndoSource{ExecutionID: "exec_fixture", Workflow: "commit", Status: operation.StatusSucceeded, PlanID: "plan_commit_fixture", PlanDigest: "sha256:source"},
+		Git:         app.UndoGitState{ProjectRoot: "/work/project", Branch: "main", HeadCommit: strings.Repeat("b", 40), WorkingTree: "clean"},
+		Reasons:     []app.UndoReason{},
+		Limitations: []string{"Plan only; execution is not implemented in this milestone."}, Plan: &undoPlan,
+	}
+	renderUndo(&output, undoResponse)
+	assertGolden(t, "undo.golden", output.String())
+
+	output.Reset()
+	if err := writeJSON(&output, undoResponse); err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "undo-json.golden", output.String())
 }
 
 func assertGolden(t *testing.T, name, got string) {

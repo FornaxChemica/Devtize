@@ -32,4 +32,6 @@ Phase C adds four reviewed executable check capabilities: `go.format.check`, `go
 
 `dvz status` uses reviewed read-only adapter methods for repository state, exact change categories, local tracking relation, and optional live branch inspection. The live check is explicit, invokes `git ls-remote --heads`, and never fetches. `dvz history` does not execute provider commands.
 
+`git.commit.uncommit_preserve_changes` is a reviewed planner-only compensation for a verified `git.commit.create` transition. Its intended future behavior is a narrowly bound mixed reset to the verified parent, classified `local_write`. It is currently `planned`, has no executable adapter binding, and can appear only in an eligible `dvz undo ... --dry-run` plan. History cannot register or select another capability.
+
 The corpus is available offline. A future `dvz sync` may supplement it with bounded, version-matched CLI help, but introspected help will remain quarantined discovery data with provenance and cannot create trusted mutation capabilities.

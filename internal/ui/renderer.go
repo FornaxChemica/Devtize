@@ -295,6 +295,9 @@ func (r *Renderer) History(response app.HistoryResponse) {
 		for _, step := range record.Steps {
 			r.indentedField("step", step.CapabilityID+" "+string(step.Status))
 		}
+		for _, observed := range record.ObservedChanges {
+			r.indentedField("observed", observed.Kind+" "+observed.BeforeCommit+" -> "+observed.AfterCommit)
+		}
 		for _, hint := range record.RecoveryHints {
 			r.indentedField("recovery", hint)
 		}
@@ -302,6 +305,53 @@ func (r *Renderer) History(response app.HistoryResponse) {
 	if response.HasMore {
 		r.field("next", "more records are available; increase --limit up to 200")
 	}
+}
+
+func (r *Renderer) Undo(response app.UndoResponse) {
+	r.heading("Undo analysis", response.Eligibility)
+	r.field("execution", response.Source.ExecutionID)
+	r.field("workflow", response.Source.Workflow)
+	r.field("source status", string(response.Source.Status))
+	r.field("source plan", response.Source.PlanID+" ("+response.Source.PlanDigest+")")
+	if observed := response.Source.ObservedChange; observed != nil {
+		r.field("recorded branch", observed.Branch)
+		r.field("recorded transition", observed.BeforeCommit+" -> "+observed.AfterCommit)
+	}
+	r.field("project", response.Git.ProjectRoot)
+	if response.Git.Branch != "" {
+		r.field("current branch", response.Git.Branch)
+	}
+	if response.Git.HeadCommit != "" {
+		r.field("current HEAD", response.Git.HeadCommit)
+	}
+	if response.Git.WorkingTree != "" {
+		r.field("working tree", response.Git.WorkingTree)
+	}
+	if response.Git.Upstream.Configured {
+		r.field("upstream", response.Git.Upstream.Remote+"/"+response.Git.Upstream.Branch)
+		if response.Git.LiveRemote != nil {
+			if response.Git.LiveRemote.Exists {
+				r.field("live remote", response.Git.LiveRemote.Commit)
+			} else {
+				r.field("live remote", "branch not found")
+			}
+		}
+	} else if response.Git.Branch != "" {
+		r.field("upstream", "not configured")
+	}
+	r.field("rollback kind", response.RollbackKind)
+	for _, reason := range response.Reasons {
+		r.warning(reason.Code + ": " + reason.Message)
+	}
+	if response.Plan != nil {
+		r.planHeader(*response.Plan)
+		r.operations(response.Plan.Operations)
+	}
+	for _, limitation := range response.Limitations {
+		r.field("limitation", limitation)
+	}
+	r.field("mutation performed", fmt.Sprint(response.MutationPerformed))
+	fmt.Fprintln(r.w, "No changes were made.")
 }
 
 func (r *Renderer) CheckStarted(capabilityID string, index, total int) {

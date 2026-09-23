@@ -1,6 +1,6 @@
 # Devtize
 
-Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides completed Phase B self-hosting and Phase C daily Git workflows: it can inspect local and optional live repository status, read redacted execution history, search a reviewed offline Git command catalog, publish a repository, create commits guarded by reviewed Go checks, and push through a separate authorization boundary. The project is pre-release and its public interfaces may still change.
+Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides completed Phase B self-hosting and Phase C daily Git workflows: it can inspect local and optional live repository status, read redacted execution history, search a reviewed offline Git command catalog, publish a repository, create commits guarded by reviewed Go checks, push through a separate authorization boundary, and inspect constrained undo eligibility without mutation. The project is pre-release and its public interfaces may still change.
 
 ## Current Features
 
@@ -9,6 +9,7 @@ Devtize is an open-source, local-first developer command layer written in Go. Th
 - `dvz find <intent>` searches reviewed Git knowledge offline and never executes a result.
 - `dvz status` reports daily Git state offline; `--remote` adds an explicit live check without fetching.
 - `dvz history` reads bounded, redacted Devtize execution records for the current project.
+- `dvz undo <execution-id> --dry-run` validates whether a recorded local commit has a safe planner-only compensation.
 - `dvz commit` creates a Conventional Commit from explicitly disclosed changed paths.
 - `dvz ship` either pushes existing reviewed commits or composes reviewed checks, a disclosed commit, and a verified push.
 - `dvz repo plan` renders the self-hosting repository plan without mutation.
@@ -47,6 +48,7 @@ go build -o dvz ./cmd/dvz
 ./dvz status
 ./dvz status --remote
 ./dvz history --limit 20
+./dvz undo EXECUTION_ID --dry-run
 ./dvz commit README.md --message "docs: update readme" --dry-run
 ./dvz ship --dry-run
 ./dvz ship README.md --message "docs: update readme" --dry-run
@@ -106,6 +108,8 @@ With no paths, message, or check overrides, `dvz ship` preserves the push-only w
 
 `dvz history` reads the local JSON Lines audit file without recording the read. Output defaults to the current project and 20 newest records; `--all` includes other projects and `--limit` accepts 1 through 200. Records are schema-validated, bounded, and redacted again when read. See [Persisted History](docs/persisted-history.md).
 
+`dvz undo <execution-id> --dry-run` treats history only as an untrusted locator. For successful `commit` and `ship.local` records with typed commit evidence, it independently verifies the current branch, `HEAD`, single parent, clean worktree, and live configured upstream before producing a digest-bound planner-only `git.commit.uncommit_preserve_changes` operation. Unsupported, legacy, published, stale, and ambiguous records return a successful unavailable analysis with stable reason codes. The command never runs `reset`, changes refs, writes history, or prompts for confirmation.
+
 ## Support Matrix
 
 | Provider or area | Level | Notes |
@@ -118,6 +122,7 @@ With no paths, message, or check overrides, `dvz ship` preserves the push-only w
 | Go project checks | executable | Reviewed format, test, vet, and build capabilities selected by stable IDs |
 | Daily Git status | executable | Offline local state by default; explicit non-fetching live verification with `--remote` |
 | Execution history | executable | Bounded, project-scoped, redacted reads through `dvz history` |
+| Constrained undo | planned | Read-only eligibility and compensation planning; execution is unavailable |
 | GitHub CLI (`gh`) | workflow-ready | Auth preflight, repository creation, and guarded description updates |
 | Go projects | detected | `go.mod` evidence |
 | JavaScript projects | detected | Metadata and recognized lockfile evidence |
@@ -189,6 +194,7 @@ No separate linter is configured. CI runs formatting verification, tests, vet, a
 - `CHECK_FAILED`: fix the reported reviewed project check; no staging, commit, or push was attempted.
 - `HISTORY_READ_FAILED`: check that the local history file is readable.
 - `HISTORY_INVALID`: inspect or archive malformed, unsupported, or oversized local history; Devtize does not rewrite it automatically.
+- `HISTORY_ENTRY_NOT_FOUND`: use an execution ID from this project's `dvz history` output.
 
 `dvz doctor` remains conservative. `dvz repo create` performs its own `gh` auth preflight before remote writes.
 
@@ -204,7 +210,7 @@ Phase B is complete. It adds reviewed Git and GitHub adapters and an immutable p
 
 Do not run manual `git init`, `git add`, `git commit`, `gh repo create`, `git remote add`, or `git push` in this folder. After the maintainer-run milestone completes, sanitized evidence should be recorded in `docs/self-hosting.md`.
 
-Phase C continues with constrained undo. Pull-request creation remains a separate future workflow boundary. Later phases cover richer provider knowledge, optional AI, a TUI, and MCP.
+Phase C includes constrained, read-only undo planning. Executable local compensation and pushed-commit revert remain separate future authorization boundaries. Pull-request creation is also a future workflow. Later phases cover richer provider knowledge, optional AI, a TUI, and MCP.
 
 ## Contributing, Security, And License
 

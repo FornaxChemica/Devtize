@@ -25,6 +25,7 @@ const (
 	CodeHistoryWriteFailed     ErrorCode = "HISTORY_WRITE_FAILED"
 	CodeHistoryReadFailed      ErrorCode = "HISTORY_READ_FAILED"
 	CodeHistoryInvalid         ErrorCode = "HISTORY_INVALID"
+	CodeHistoryEntryNotFound   ErrorCode = "HISTORY_ENTRY_NOT_FOUND"
 	CodePostconditionFailed    ErrorCode = "POSTCONDITION_FAILED"
 )
 

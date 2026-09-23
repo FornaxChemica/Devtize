@@ -106,6 +106,7 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	root.AddCommand(commitCommand(deps, options, stdout))
 	root.AddCommand(statusCommand(deps, options, stdout))
 	root.AddCommand(historyCommand(deps, options, stdout))
+	root.AddCommand(undoCommand(deps, options, stdout))
 	root.AddCommand(repoCommand(deps, options, stdout))
 	root.AddCommand(shipCommand(deps, options, stdout))
 	root.AddCommand(versionCommand(options, stdout))
@@ -159,6 +160,30 @@ func historyCommand(deps dependencies, rootOptions *rootOptions, stdout io.Write
 	}
 	command.Flags().IntVar(&options.Limit, "limit", 20, "maximum records to show (1-200)")
 	command.Flags().BoolVar(&options.All, "all", false, "include records from every project")
+	return command
+}
+
+func undoCommand(deps dependencies, rootOptions *rootOptions, stdout io.Writer) *cobra.Command {
+	var dryRun bool
+	command := &cobra.Command{
+		Use: "undo <execution-id>", Short: "Inspect a constrained compensation plan without mutation", Args: cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			loaded, err := loadConfig(deps, rootOptions)
+			if err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			response, err := undoService(deps).Run(command.Context(), app.UndoOptions{ExecutionID: args[0], DryRun: dryRun})
+			if err != nil {
+				return err
+			}
+			if rootOptions.jsonOutput {
+				return writeJSON(stdout, response)
+			}
+			renderUndo(stdout, response, humanUIOptions(deps, loaded.Config))
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "inspect compensation eligibility and render a plan without mutation")
 	return command
 }
 
@@ -506,6 +531,10 @@ func historyService(deps dependencies, cfg config.Config) app.HistoryService {
 	return app.HistoryService{WorkingDir: deps.workingDir, Config: cfg, History: history.Store{Path: localHistoryPath(deps)}}
 }
 
+func undoService(deps dependencies) app.UndoService {
+	return app.UndoService{WorkingDir: deps.workingDir, Runner: deps.runner, History: history.Store{Path: localHistoryPath(deps)}}
+}
+
 func localHistoryPath(deps dependencies) string {
 	configPath, err := config.UserPath(deps.environment, deps.userConfigDir)
 	if err != nil || configPath == "" {
@@ -623,7 +652,7 @@ func exitCode(err error) int {
 		return exitProcessFailure
 	}
 	switch operational.Code {
-	case app.CodeInvalidUsage, app.CodeConfigInvalid, app.CodeCapabilityNotFound, app.CodeProjectNotFound:
+	case app.CodeInvalidUsage, app.CodeConfigInvalid, app.CodeCapabilityNotFound, app.CodeProjectNotFound, app.CodeHistoryEntryNotFound:
 		return exitInvalid
 	case app.CodePlanInvalid, app.CodePreconditionFailed:
 		return exitInvalid
@@ -678,6 +707,10 @@ func renderStatus(writer io.Writer, response app.StatusResponse, options ...ui.O
 
 func renderHistory(writer io.Writer, response app.HistoryResponse, options ...ui.Options) {
 	ui.New(writer, firstUIOptions(options)).History(response)
+}
+
+func renderUndo(writer io.Writer, response app.UndoResponse, options ...ui.Options) {
+	ui.New(writer, firstUIOptions(options)).Undo(response)
 }
 
 func firstUIOptions(options []ui.Options) ui.Options {

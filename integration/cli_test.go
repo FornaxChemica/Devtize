@@ -159,6 +159,15 @@ func TestBuiltBinaryReturnsStableInvalidUseExit(t *testing.T) {
 	if !strings.Contains(string(output), `"code": "INVALID_USAGE"`) {
 		t.Fatalf("error output = %s", output)
 	}
+
+	missing := exec.Command(binary, "--json", "undo", "exec_missing", "--dry-run")
+	missing.Dir = t.TempDir()
+	missing.Env = append(os.Environ(), "XDG_CONFIG_HOME="+t.TempDir())
+	output, err = missing.CombinedOutput()
+	exitErr, ok = err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 2 || !strings.Contains(string(output), `"code": "HISTORY_ENTRY_NOT_FOUND"`) {
+		t.Fatalf("missing history exit=%v output=%s", err, output)
+	}
 }
 
 func TestBuiltBinaryCommitDryRunAndExecutionInTemporaryRepository(t *testing.T) {
@@ -367,6 +376,119 @@ func TestBuiltBinaryComposedShipRunsChecksCommitsAndPushes(t *testing.T) {
 	}
 	if message := strings.TrimSpace(runGit(t, repo, "log", "-1", "--format=%s")); message != "feat: add checked fixture" {
 		t.Fatalf("message = %q", message)
+	}
+}
+
+func TestBuiltBinaryUndoPlansUnpublishedCommitAndRefusesPublishedCommit(t *testing.T) {
+	root := filepath.Clean("..")
+	binary := filepath.Join(t.TempDir(), "dvz")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dvz")
+	build.Dir = root
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dvz: %v\n%s", err, output)
+	}
+
+	repo := t.TempDir()
+	runGit(t, repo, "init", "--initial-branch", "main")
+	runGit(t, repo, "config", "user.name", "Devtize Test")
+	runGit(t, repo, "config", "user.email", "devtize-test@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "--", "README.md")
+	runGit(t, repo, "commit", "--message", "chore: initial fixture")
+	parent := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	configHome := t.TempDir()
+	environment := append(os.Environ(), "HOME="+configHome, "XDG_CONFIG_HOME="+configHome, "NO_COLOR=1")
+	commit := exec.Command(binary, "commit", "README.md", "--message", "docs: update fixture")
+	commit.Dir = repo
+	commit.Env = environment
+	commit.Stdin = strings.NewReader("commit\n")
+	if output, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v\n%s", err, output)
+	}
+	head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	if head == parent {
+		t.Fatal("fixture commit was not created")
+	}
+
+	historyCommand := exec.Command(binary, "--json", "history", "--limit", "1")
+	historyCommand.Dir = repo
+	historyCommand.Env = environment
+	historyOutput, err := historyCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("history: %v\n%s", err, historyOutput)
+	}
+	var historyResponse struct {
+		Records []struct {
+			ExecutionID     string `json:"execution_id"`
+			ObservedChanges []struct {
+				BeforeCommit string `json:"before_commit"`
+				AfterCommit  string `json:"after_commit"`
+			} `json:"observed_changes"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(historyOutput, &historyResponse); err != nil || len(historyResponse.Records) != 1 || len(historyResponse.Records[0].ObservedChanges) != 1 {
+		t.Fatalf("history response=%#v err=%v output=%s", historyResponse, err, historyOutput)
+	}
+	record := historyResponse.Records[0]
+	if record.ObservedChanges[0].BeforeCommit != parent || record.ObservedChanges[0].AfterCommit != head {
+		t.Fatalf("observed transition=%#v, want %s -> %s", record.ObservedChanges[0], parent, head)
+	}
+	historyPath := filepath.Join(configHome, "devtize", "history.jsonl")
+	historyBefore, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusBefore := runGit(t, repo, "status", "--porcelain=v1")
+
+	undo := exec.Command(binary, "--json", "undo", record.ExecutionID, "--dry-run")
+	undo.Dir = repo
+	undo.Env = environment
+	undoOutput, err := undo.CombinedOutput()
+	if err != nil || !strings.Contains(string(undoOutput), `"eligibility": "available"`) || !strings.Contains(string(undoOutput), `"git.commit.uncommit_preserve_changes"`) || strings.Contains(string(undoOutput), "\x1b[") {
+		t.Fatalf("undo available: %v\n%s", err, undoOutput)
+	}
+	if strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")) != head || runGit(t, repo, "status", "--porcelain=v1") != statusBefore {
+		t.Fatal("undo planning changed local repository state")
+	}
+	if historyAfter, err := os.ReadFile(historyPath); err != nil || string(historyAfter) != string(historyBefore) {
+		t.Fatalf("undo planning changed history: err=%v", err)
+	}
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", bare)
+	runGit(t, repo, "remote", "add", "origin", bare)
+	runGit(t, repo, "push", "--set-upstream", "origin", "main")
+	remoteBefore := strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main"))
+	undo = exec.Command(binary, "--json", "undo", record.ExecutionID, "--dry-run")
+	undo.Dir = repo
+	undo.Env = environment
+	undoOutput, err = undo.CombinedOutput()
+	var unavailable struct {
+		Eligibility string `json:"eligibility"`
+		Reasons     []struct {
+			Code string `json:"code"`
+		} `json:"reasons"`
+		Plan any `json:"plan"`
+	}
+	jsonErr := json.Unmarshal(undoOutput, &unavailable)
+	if err != nil || jsonErr != nil || unavailable.Eligibility != "unavailable" || len(unavailable.Reasons) != 1 || unavailable.Reasons[0].Code != "COMMIT_PUBLISHED" || unavailable.Plan != nil {
+		t.Fatalf("undo published: %v\n%s", err, undoOutput)
+	}
+	if strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")) != head || strings.TrimSpace(runGit(t, bare, "rev-parse", "refs/heads/main")) != remoteBefore || runGit(t, repo, "status", "--porcelain=v1") != statusBefore {
+		t.Fatal("published undo inspection changed local or remote state")
+	}
+	if historyAfter, err := os.ReadFile(historyPath); err != nil || string(historyAfter) != string(historyBefore) {
+		t.Fatalf("published undo inspection changed history: err=%v", err)
 	}
 }
 

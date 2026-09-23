@@ -89,11 +89,32 @@ type CheckCapability struct {
 	Effect     string      `json:"effect" yaml:"effect"`
 }
 
+// CompensationCapability describes reviewed recovery behavior. Planned support
+// is metadata only and cannot be dispatched to an adapter.
+type CompensationCapability struct {
+	ID                 string       `json:"id" yaml:"id"`
+	ProviderID         string       `json:"provider_id" yaml:"provider_id"`
+	SourceCapabilityID string       `json:"source_capability_id" yaml:"source_capability_id"`
+	Summary            string       `json:"summary" yaml:"summary"`
+	Risk               safety.Risk  `json:"risk" yaml:"risk"`
+	Effect             string       `json:"effect" yaml:"effect"`
+	Support            SupportLevel `json:"support" yaml:"support"`
+}
+
 var builtinChecks = []CheckCapability{
 	{ID: "go.format.check", ProviderID: "go", Summary: "Verify Go source formatting", Risk: safety.RiskReadOnly, Effect: "reads tracked and nonignored Go source files"},
 	{ID: "go.test", ProviderID: "go", Summary: "Run Go tests", Risk: safety.RiskLocalWrite, Effect: "executes project test code and may write local caches"},
 	{ID: "go.vet", ProviderID: "go", Summary: "Run Go static analysis", Risk: safety.RiskLocalWrite, Effect: "loads project packages and may write local caches"},
 	{ID: "go.build", ProviderID: "go", Summary: "Build Go packages", Risk: safety.RiskLocalWrite, Effect: "compiles project packages and may write local caches"},
+}
+
+var builtinCompensations = []CompensationCapability{
+	{
+		ID: "git.commit.uncommit_preserve_changes", ProviderID: "git", SourceCapabilityID: "git.commit.create",
+		Summary: "Move the local branch to the verified parent while preserving working-tree content",
+		Risk:    safety.RiskLocalWrite, Effect: "moves the local branch and reconstructs the removed commit as working-tree changes",
+		Support: SupportPlanned,
+	},
 }
 
 func BuiltinChecks() []CheckCapability {
@@ -124,6 +145,15 @@ func ValidateCheckIDs(ids []string) error {
 		seen[id] = struct{}{}
 	}
 	return nil
+}
+
+func CompensationByID(id string) (CompensationCapability, bool) {
+	for _, capability := range builtinCompensations {
+		if capability.ID == id {
+			return capability, true
+		}
+	}
+	return CompensationCapability{}, false
 }
 
 func NewCatalog(commands []CommandKnowledge) (*Catalog, error) {

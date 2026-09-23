@@ -372,7 +372,7 @@ func (s ShipWorkflowService) recordRemotePlanFailure(response ShipWorkflowRespon
 	}
 	now := s.now()
 	return s.History.Append(history.Record{
-		SchemaVersion: 1, WorkflowID: response.WorkflowID, ExecutionID: "exec_" + now.Format("20060102150405") + "_remote_plan",
+		SchemaVersion: 1, WorkflowID: response.WorkflowID, ExecutionID: history.ExecutionID(now, response.Local.Plan.Digest, "ship.remote-plan"),
 		PlanID: response.Local.Plan.ID, PlanDigest: response.Local.Plan.Digest,
 		StartedAt: now, FinishedAt: now, Invocation: map[string]any{"workflow": "ship.remote-plan"},
 		Project: map[string]string{"root": response.Local.Plan.ProjectRoot}, Status: operation.StatusPartiallyCompleted,

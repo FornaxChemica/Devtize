@@ -97,3 +97,55 @@ func TestAppendDoesNotMutateCallerMaps(t *testing.T) {
 		t.Fatalf("caller record was mutated: %#v", record)
 	}
 }
+
+func TestFindReturnsOneProjectScopedExecutionAndRejectsDuplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	store := Store{Path: path}
+	for _, record := range []Record{
+		{ExecutionID: "exec_target", Project: map[string]string{"root": "/one"}, Status: operation.StatusSucceeded},
+		{ExecutionID: "exec_target", Project: map[string]string{"root": "/two"}, Status: operation.StatusSucceeded},
+	} {
+		if err := store.Append(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record, found, err := store.Find(FindOptions{ProjectRoot: "/one", ExecutionID: "exec_target"})
+	if err != nil || !found || record.Project["root"] != "/one" {
+		t.Fatalf("record=%#v found=%t err=%v", record, found, err)
+	}
+	if _, _, err := store.Find(FindOptions{ExecutionID: "exec_target"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate lookup err=%v", err)
+	}
+}
+
+func TestFindPreservesTypedEvidenceAndRedactsIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	store := Store{Path: path}
+	record := Record{
+		ExecutionID: "exec_evidence", Project: map[string]string{"root": "/project"},
+		ObservedChanges: []ObservedChange{{
+			Kind: "git.commit.created", ProviderID: "git", CapabilityID: "git.commit.create",
+			Branch: "secret token raw-value", BeforeCommit: strings.Repeat("a", 40), AfterCommit: strings.Repeat("b", 40),
+		}},
+	}
+	if err := store.Append(record); err != nil {
+		t.Fatal(err)
+	}
+	found, ok, err := store.Find(FindOptions{ProjectRoot: "/project", ExecutionID: "exec_evidence"})
+	if err != nil || !ok || len(found.ObservedChanges) != 1 {
+		t.Fatalf("record=%#v ok=%t err=%v", found, ok, err)
+	}
+	if strings.Contains(found.ObservedChanges[0].Branch, "raw-value") {
+		t.Fatalf("evidence was not redacted: %#v", found.ObservedChanges[0])
+	}
+}
+
+func TestExecutionIDUsesDigestAndDiscriminator(t *testing.T) {
+	now := time.Date(2026, 9, 23, 1, 2, 3, 0, time.UTC)
+	first := ExecutionID(now, "sha256:one", "commit")
+	second := ExecutionID(now, "sha256:two", "commit")
+	third := ExecutionID(now, "sha256:one", "ship")
+	if first == second || first == third || !strings.HasPrefix(first, "exec_20260923010203_") {
+		t.Fatalf("IDs are not collision resistant: %q %q %q", first, second, third)
+	}
+}

@@ -239,11 +239,12 @@ retry path without destructive cleanup.
   execution requiring live reinspection.
 - Test mutations only with fakes and local bare remotes.
 
-### 9. [ ] Implement Constrained `undo`
+### 9. [x] Implement Constrained `undo` Planning
 
-- Expose only registered compensation plans.
-- Display limitations and require a fresh digest-bound confirmation.
-- Never infer reversal from free-form history.
+- Inspect exact project-scoped execution records and expose only the registered planner-only compensation.
+- Validate typed commit evidence against live branch, `HEAD`, parent, worktree, and upstream state.
+- Render digest-bound dry-run plans and limitations without executing or recording a mutation.
+- Never infer reversal from free-form or legacy history.
 
 ## First-Slice Acceptance Criteria
 
@@ -279,5 +280,15 @@ retry path without destructive cleanup.
   60/80/120-column behavior; JSON remains ANSI-free.
 - [x] Unit, integration, race, vet, formatting, build, and local-bare-remote
   acceptance checks pass.
-- [x] PR creation, constrained undo, AI, TUI, MCP, provider sync, and arbitrary
-  execution remain outside this milestone.
+- [x] PR creation, executable undo, pushed-commit revert, AI, TUI, MCP,
+  provider sync, and arbitrary execution remain outside this milestone.
+
+## Constrained Undo Planning Acceptance Criteria
+
+- [x] `dvz undo <execution-id> --dry-run` never mutates Git, remotes, or history.
+- [x] History locates evidence but never supplies executable behavior or authorization.
+- [x] Eligible future commit records produce one digest-bound planner-only compensation operation.
+- [x] Published, stale, ambiguous, unsupported, and legacy records return stable unavailable reasons without guessing.
+- [x] Existing schema-version-1 history remains readable through additive observed changes.
+- [x] Human and JSON output are stable, ANSI-safe, and explicit that no changes were made.
+- [x] Full tests, race tests, vet, formatting, build, diff checks, and local-bare-remote acceptance pass.

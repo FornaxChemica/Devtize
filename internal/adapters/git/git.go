@@ -131,6 +131,12 @@ type CommitSummary struct {
 	Subject string `json:"subject"`
 }
 
+type UpstreamTarget struct {
+	Configured bool   `json:"configured"`
+	Remote     string `json:"remote,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+}
+
 type ChangeSet struct {
 	Staged    []string `json:"staged,omitempty"`
 	Unstaged  []string `json:"unstaged,omitempty"`
@@ -409,6 +415,49 @@ func (a Adapter) InspectHeadMessage(ctx context.Context, projectRoot string) (st
 		return "", err
 	}
 	return strings.TrimRight(result.Stdout, "\r\n"), nil
+}
+
+func (a Adapter) InspectCommitParents(ctx context.Context, projectRoot, commit string) ([]string, error) {
+	if !validCommitID(commit) {
+		return nil, errors.New("commit parent inspection requires a full commit ID")
+	}
+	result, err := a.run(ctx, projectRoot, "rev-list", "--parents", "-n", "1", commit, "--")
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Fields(result.Stdout)
+	if len(fields) == 0 || fields[0] != commit {
+		return nil, errors.New("git returned an invalid commit parent response")
+	}
+	for _, parent := range fields[1:] {
+		if !validCommitID(parent) {
+			return nil, errors.New("git returned an invalid parent commit ID")
+		}
+	}
+	return append([]string(nil), fields[1:]...), nil
+}
+
+func (a Adapter) InspectUpstreamTarget(ctx context.Context, projectRoot, branch string) (UpstreamTarget, error) {
+	if !validRemoteOrBranch(branch) {
+		return UpstreamTarget{}, errors.New("upstream inspection requires a safe branch name")
+	}
+	format := "%(upstream:remotename)%00%(upstream:remoteref)%00"
+	result, err := a.run(ctx, projectRoot, "for-each-ref", "--format="+format, "refs/heads/"+branch)
+	if err != nil {
+		return UpstreamTarget{}, err
+	}
+	fields := nulFields(strings.TrimSpace(result.Stdout))
+	if len(fields) == 0 {
+		return UpstreamTarget{}, nil
+	}
+	if len(fields) != 2 || !validRemoteOrBranch(fields[0]) || !strings.HasPrefix(fields[1], "refs/heads/") {
+		return UpstreamTarget{}, errors.New("git returned an invalid upstream response")
+	}
+	upstreamBranch := strings.TrimPrefix(fields[1], "refs/heads/")
+	if !validRemoteOrBranch(upstreamBranch) {
+		return UpstreamTarget{}, errors.New("git returned an invalid upstream branch")
+	}
+	return UpstreamTarget{Configured: true, Remote: fields[0], Branch: upstreamBranch}, nil
 }
 
 func (a Adapter) run(ctx context.Context, dir string, args ...string) (devprocess.CommandResult, error) {

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "status": "validated",
+  "eligibility": "available",
+  "rollback_kind": "compensating",
+  "mutation_performed": false,
+  "source": {
+    "execution_id": "exec_fixture",
+    "workflow": "commit",
+    "status": "succeeded",
+    "plan_id": "plan_commit_fixture",
+    "plan_digest": "sha256:source"
+  },
+  "git": {
+    "project_root": "/work/project",
+    "branch": "main",
+    "head_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "working_tree": "clean",
+    "upstream": {
+      "configured": false
+    }
+  },
+  "reasons": [],
+  "limitations": [
+    "Plan only; execution is not implemented in this milestone."
+  ],
+  "plan": {
+    "schema_version": 1,
+    "id": "plan_undo_20260923010203",
+    "intent": "Plan local compensation for a verified Devtize-created commit",
+    "created_at": "2026-09-23T01:02:03Z",
+    "project_root": "/work/project",
+    "dry_run": true,
+    "digest": "sha256:undo",
+    "operations": [
+      {
+        "id": "op_undo_uncommit",
+        "capability_id": "git.commit.uncommit_preserve_changes",
+        "provider_id": "git",
+        "summary": "Move the local branch to the verified parent while preserving working-tree content",
+        "risk": "local_write",
+        "effects": [
+          {
+            "kind": "move_local_branch",
+            "target": "main"
+          }
+        ],
+        "inputs": {
+          "execution_supported": false
+        }
+      }
+    ]
+  }
+}

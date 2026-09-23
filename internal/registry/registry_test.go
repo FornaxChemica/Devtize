@@ -59,3 +59,10 @@ func TestBuiltinChecksAreClosedAndRiskClassified(t *testing.T) {
 		t.Fatal("unknown check accepted")
 	}
 }
+
+func TestUndoCompensationIsPlannerOnly(t *testing.T) {
+	capability, ok := registry.CompensationByID("git.commit.uncommit_preserve_changes")
+	if !ok || capability.ProviderID != "git" || capability.SourceCapabilityID != "git.commit.create" || capability.Risk != safety.RiskLocalWrite || capability.Support != registry.SupportPlanned {
+		t.Fatalf("capability=%#v ok=%t", capability, ok)
+	}
+}

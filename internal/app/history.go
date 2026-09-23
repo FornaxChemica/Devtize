@@ -22,18 +22,19 @@ type HistoryOptions struct {
 }
 
 type HistoryEntry struct {
-	SchemaVersion int                    `json:"schema_version"`
-	WorkflowID    string                 `json:"workflow_id,omitempty"`
-	ExecutionID   string                 `json:"execution_id"`
-	Workflow      string                 `json:"workflow"`
-	ProjectRoot   string                 `json:"project_root,omitempty"`
-	PlanID        string                 `json:"plan_id"`
-	PlanDigest    string                 `json:"plan_digest"`
-	StartedAt     time.Time              `json:"started_at"`
-	FinishedAt    time.Time              `json:"finished_at"`
-	Status        operation.Status       `json:"status"`
-	Steps         []operation.StepResult `json:"steps"`
-	RecoveryHints []string               `json:"recovery_hints"`
+	SchemaVersion   int                      `json:"schema_version"`
+	WorkflowID      string                   `json:"workflow_id,omitempty"`
+	ExecutionID     string                   `json:"execution_id"`
+	Workflow        string                   `json:"workflow"`
+	ProjectRoot     string                   `json:"project_root,omitempty"`
+	PlanID          string                   `json:"plan_id"`
+	PlanDigest      string                   `json:"plan_digest"`
+	StartedAt       time.Time                `json:"started_at"`
+	FinishedAt      time.Time                `json:"finished_at"`
+	Status          operation.Status         `json:"status"`
+	Steps           []operation.StepResult   `json:"steps"`
+	RecoveryHints   []string                 `json:"recovery_hints"`
+	ObservedChanges []history.ObservedChange `json:"observed_changes,omitempty"`
 }
 
 type HistoryResponse struct {
@@ -104,7 +105,7 @@ func historyEntry(record history.Record) HistoryEntry {
 		SchemaVersion: record.SchemaVersion, WorkflowID: record.WorkflowID, ExecutionID: record.ExecutionID, Workflow: historyWorkflow(record),
 		ProjectRoot: record.Project["root"], PlanID: record.PlanID, PlanDigest: record.PlanDigest,
 		StartedAt: record.StartedAt, FinishedAt: record.FinishedAt, Status: record.Status,
-		Steps: steps, RecoveryHints: hints,
+		Steps: steps, RecoveryHints: hints, ObservedChanges: append([]history.ObservedChange(nil), record.ObservedChanges...),
 	}
 }
 

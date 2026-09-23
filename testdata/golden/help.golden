@@ -12,6 +12,7 @@ Available Commands:
   repo        Plan and run the Phase B repository self-hosting workflow
   ship        Run reviewed checks, commit, and push without force
   status      Inspect daily Git status without mutation
+  undo        Inspect a constrained compensation plan without mutation
   version     Show Devtize build information
 
 Flags:

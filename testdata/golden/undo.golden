@@ -1,0 +1,22 @@
+- Undo analysis: available
+execution: exec_fixture
+workflow: commit
+source status: succeeded
+source plan: plan_commit_fixture (sha256:source)
+project: /work/project
+current branch: main
+current HEAD: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+working tree: clean
+upstream: not configured
+rollback kind: compensating
+- Plan plan_undo_20260923010203
+digest: sha256:undo
+project: /work/project
+dry-run: true
+operations:
+  - git.commit.uncommit_preserve_changes [local_write] Move the local branch to the verified parent
+    while preserving working-tree content
+    effect: move_local_branch main
+limitation: Plan only; execution is not implemented in this milestone.
+mutation performed: false
+No changes were made.
