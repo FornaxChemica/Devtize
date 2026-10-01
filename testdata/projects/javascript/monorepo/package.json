@@ -1,0 +1,4 @@
+{
+  "packageManager": "pnpm@10.0.0",
+  "workspaces": ["packages/*"]
+}

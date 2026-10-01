@@ -68,6 +68,47 @@ func TestDoctorReportsOptionalFailuresWithoutCrashing(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsForAmbiguityAndWarningDiagnostics(t *testing.T) {
+	tests := []detect.Project{
+		{Status: "detected", Root: "/work", Ambiguous: true},
+		{Status: "detected", Root: "/work", Diagnostics: []detect.Diagnostic{{Code: "manifest_invalid", Severity: "warning", Path: "package.json", Message: "safe"}}},
+	}
+	for _, project := range tests {
+		service := app.DoctorService{
+			WorkingDir: "/work", Project: func(string) (detect.Project, error) { return project, nil },
+			Tools: toolDetector{installations: map[string]detect.ToolInstallation{
+				"git": {ProviderID: "git", Status: detect.ToolInstalled},
+				"gh":  {ProviderID: "gh", Status: detect.ToolInstalled},
+			}},
+		}
+		response, err := service.Run(context.Background(), app.ConfigCheck{Status: "valid"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.Status != "warning" {
+			t.Fatalf("response = %#v", response)
+		}
+	}
+}
+
+func TestDoctorKeepsUnresolvedJavaScriptProjectInformational(t *testing.T) {
+	project := detect.Project{Status: "detected", Root: "/work", Runtimes: []string{"javascript"}, ResolutionHint: "Declare packageManager."}
+	service := app.DoctorService{
+		WorkingDir: "/work", Project: func(string) (detect.Project, error) { return project, nil },
+		Tools: toolDetector{installations: map[string]detect.ToolInstallation{
+			"git": {ProviderID: "git", Status: detect.ToolInstalled},
+			"gh":  {ProviderID: "gh", Status: detect.ToolInstalled},
+		}},
+	}
+	response, err := service.Run(context.Background(), app.ConfigCheck{Status: "valid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "ok" || response.Project.PackageManager != "" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestErrorPreservesCause(t *testing.T) {
 	cause := errors.New("cause")
 	err := app.Wrap(app.CodeConfigInvalid, "safe", cause)

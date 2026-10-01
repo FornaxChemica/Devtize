@@ -1,12 +1,13 @@
 # Architecture
 
-Phase D.2 builds on the Phase A read-only paths, Phase B repository workflows, and Phase C daily commands with independent Git and GitHub CLI version-aware discovery sync:
+Phase D.3 builds on the Phase A read-only paths, Phase B repository workflows, Phase C daily commands, and Phase D.1/D.2 discovery sync with bounded JavaScript/TypeScript project detection:
 
 ```text
 cmd/dvz -> internal/app -> internal/search -> internal/registry -> registry/builtin
 cmd/dvz -> internal/app/SyncService -> internal/adapters/git -> internal/process -> git help
 internal/app/SyncService -> internal/registry/CacheStore
 cmd/dvz -> internal/app -> internal/detect -> internal/process -> git or gh
+cmd/dvz -> internal/app -> internal/detect -> bounded project filesystem reads
 cmd/dvz -> internal/app -> internal/operation -> internal/safety
 cmd/dvz -> internal/app -> internal/adapters/git -> internal/process -> git
 cmd/dvz -> internal/app -> internal/adapters/github -> internal/process -> gh
@@ -16,6 +17,14 @@ cmd/dvz -> internal/app -> internal/history
 ```
 
 `cmd/dvz` owns Cobra wiring, output streams, JSON encoding, and process exit codes. `internal/ui` owns adaptive human rendering and has no process access. Application services coordinate typed requests and responses without importing Cobra. Registry entries are reviewed discovery metadata or a closed set of executable check capabilities. Search is deterministic and has no process dependency. Detection owns project evidence and tool-version interpretation. `internal/process` is the only general subprocess boundary.
+
+Project detection remains inside `internal/detect` and strengthens the original
+Phase A path rather than adding a second detector. One bounded ancestor walk
+selects the nearest project marker and nearest enclosing workspace, stopping at
+the Git boundary. Strict package-manifest parsing and package-manager
+resolution are pure filesystem/domain logic. Only `DoctorService` and the UI
+consume the additive result; registry, configuration, cache, history, and
+operation schemas are unchanged.
 
 Configuration is loaded before command behavior and is passed as typed state. Domain packages do not import Cobra. Focused services reuse operation, history, safety, and adapter boundaries without introducing a generic workflow DSL. `raw`, TUI, MCP, and a broad workflow catalog remain absent.
 
@@ -28,6 +37,13 @@ Configuration is loaded before command behavior and is passed as typed state. Do
 ## Trust Boundary
 
 CLI input, config files, project markers, executable output, cache files, and registry descriptions are data, not instructions. Tool detection invokes only fixed version arguments through the process runner. Git sync accepts reviewed depth-one inventory rows. GitHub CLI sync parses bounded depth-two `##`/`###` headings, aliases, usage, and fixed-column flags from only `gh help reference`; over-depth sections are excluded. Each provider owns its parser and cache validation, and one corrupt cache cannot hide another. Neither sync path invokes a discovered name. Knowledge returned by `dvz find` contains no callback, executable adapter, validator, or authorization state and cannot be promoted to execution.
+
+JavaScript/TypeScript project files are likewise untrusted data. Detection uses
+`Lstat`, accepts non-Git markers only as regular non-symlink files, reads at
+most 1 MiB from each of at most 16 manifests, accepts exactly one top-level
+JSON object, and inspects at most 64 ancestors. Workspace globs and members are
+never expanded. Metadata selects only an informational result and cannot name
+an executable, arguments, capability, or adapter.
 
 Mutations enter through application services, immutable typed plans, safety policy, reviewed adapters, postcondition checks, and redacted history. `dvz repo create` groups local-write confirmation separately from remote repository creation and push. Unexpected remotes, detached HEAD, incompatible GitHub repositories, missing auth, and likely secret selections stop before unsafe mutation. The narrow unpublished-initial-commit repair remains in the repository application service and adapter boundary; it is not a general history-editing workflow.
 

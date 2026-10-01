@@ -61,6 +61,83 @@ func TestDetailedLayoutWrapsAtConfiguredWidths(t *testing.T) {
 	}
 }
 
+func TestDoctorProjectDetectionGoldensAtSupportedWidths(t *testing.T) {
+	response := app.DoctorResponse{
+		SchemaVersion: 1, Status: "warning", Config: app.ConfigCheck{Status: "valid"},
+		Project: detect.Project{
+			Status: "detected", Root: "/workspace/Devtize/packages/web", WorkspaceRoot: "/workspace/Devtize",
+			Runtimes: []string{"javascript", "node", "typescript"}, PackageManager: "pnpm", PackageManagerVersion: "10.0.0",
+			PackageManagerConfidence: detect.ConfidenceLow, Confidence: detect.ConfidenceHigh, Ambiguous: true,
+			RejectedAlternatives: []detect.RejectedAlternative{{Kind: "lockfile", Value: "yarn", Reason: "conflicts_with_selected"}},
+			Diagnostics:          []detect.Diagnostic{{Code: "manifest_invalid", Severity: "warning", Path: "packages/web/package.json", Message: "package manifest is not one valid bounded JSON object"}},
+			ResolutionHint:       "Use one supported packageManager declaration and align recognized lockfiles with it.",
+		},
+		Tools:    []detect.ToolInstallation{{ProviderID: "gh", Status: detect.ToolInstalled, Version: "2.93.0"}, {ProviderID: "git", Status: detect.ToolInstalled, Version: "2.50.1"}},
+		Registry: app.RegistryCheck{Status: "available", KnowledgeStatus: "builtin_only", Entries: 12},
+	}
+	for _, width := range []int{60, 80, 120} {
+		var output bytes.Buffer
+		New(&output, Options{Color: config.ColorNever, Environment: map[string]string{}, Capabilities: &Capabilities{Width: width}}).Doctor(response)
+		for _, line := range strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n") {
+			if len([]rune(line)) > width {
+				t.Fatalf("width %d line has %d runes: %q", width, len([]rune(line)), line)
+			}
+		}
+		golden := filepath.Join("testdata", fmt.Sprintf("doctor-project-%d.golden", width))
+		want, err := os.ReadFile(golden)
+		if err != nil {
+			t.Fatalf("read %s: %v\n--- output ---\n%s", golden, err, output.String())
+		}
+		if output.String() != string(want) {
+			t.Fatalf("width %d output differs\n--- got ---\n%s--- want ---\n%s", width, output.String(), want)
+		}
+	}
+}
+
+func TestDoctorSanitizesControlCharacters(t *testing.T) {
+	response := app.DoctorResponse{
+		Status: "warning", Config: app.ConfigCheck{Status: "valid"},
+		Project:  detect.Project{Status: "detected", Root: "/work/unsafe\nroot", Runtimes: []string{"javascript"}, Diagnostics: []detect.Diagnostic{{Code: "unsafe", Severity: "warning", Message: "line\nbreak"}}},
+		Registry: app.RegistryCheck{},
+	}
+	var output bytes.Buffer
+	New(&output, Options{Color: config.ColorNever, Environment: map[string]string{}, Capabilities: &Capabilities{Width: 120}}).Doctor(response)
+	if strings.Contains(output.String(), "unsafe\nroot") || strings.Contains(output.String(), "line\nbreak") || !strings.Contains(output.String(), "unsafe?root") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestDoctorRepresentativeProjectCasesGolden(t *testing.T) {
+	base := func(project detect.Project, status string) app.DoctorResponse {
+		return app.DoctorResponse{
+			SchemaVersion: 1, Status: status, Config: app.ConfigCheck{Status: "valid"}, Project: project,
+			Registry: app.RegistryCheck{Status: "available", KnowledgeStatus: "builtin_only", Entries: 12},
+		}
+	}
+	cases := []struct {
+		name     string
+		response app.DoctorResponse
+	}{
+		{"unambiguous", base(detect.Project{Status: "detected", Root: "/work/app", Runtimes: []string{"javascript", "node"}, PackageManager: "pnpm", PackageManagerVersion: "10.0.0", PackageManagerConfidence: detect.ConfidenceHigh, Confidence: detect.ConfidenceHigh}, "ok")},
+		{"ambiguous", base(detect.Project{Status: "detected", Root: "/work/app", Runtimes: []string{"bun", "javascript"}, PackageManager: "bun", PackageManagerVersion: "1.2.0", PackageManagerConfidence: detect.ConfidenceLow, Confidence: detect.ConfidenceHigh, Ambiguous: true, RejectedAlternatives: []detect.RejectedAlternative{{Kind: "lockfile", Value: "yarn", Reason: "conflicts_with_selected"}}, ResolutionHint: "Use one supported packageManager declaration and align recognized lockfiles with it."}, "warning")},
+		{"monorepo", base(detect.Project{Status: "detected", Root: "/work/packages/app", WorkspaceRoot: "/work", Runtimes: []string{"javascript", "typescript"}, PackageManager: "pnpm", PackageManagerVersion: "10.0.0", PackageManagerConfidence: detect.ConfidenceHigh, Confidence: detect.ConfidenceHigh}, "ok")},
+		{"malformed", base(detect.Project{Status: "detected", Root: "/work/app", Runtimes: []string{"javascript"}, Confidence: detect.ConfidenceMedium, Diagnostics: []detect.Diagnostic{{Code: "manifest_invalid", Severity: "warning", Path: "package.json", Message: "package manifest is not one valid bounded JSON object"}}, ResolutionHint: "Declare packageManager in package.json or add one recognized lockfile."}, "warning")},
+		{"unresolved", base(detect.Project{Status: "detected", Root: "/work/app", Runtimes: []string{"javascript"}, Confidence: detect.ConfidenceMedium, ResolutionHint: "Declare packageManager in package.json or add one recognized lockfile."}, "ok")},
+	}
+	var output bytes.Buffer
+	for _, test := range cases {
+		fmt.Fprintf(&output, "case %s\n", test.name)
+		New(&output, Options{Color: config.ColorNever, Environment: map[string]string{}, Capabilities: &Capabilities{Width: 80}}).Doctor(test.response)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "doctor-project-cases.golden"))
+	if err != nil {
+		t.Fatalf("read golden: %v\n--- output ---\n%s", err, output.String())
+	}
+	if output.String() != string(want) {
+		t.Fatalf("output differs\n--- got ---\n%s--- want ---\n%s", output.String(), want)
+	}
+}
+
 func TestUndoLayoutFitsNarrowAndWideRedirectedOutput(t *testing.T) {
 	response := app.UndoResponse{
 		Eligibility: app.UndoUnavailable, RollbackKind: app.UndoUnavailable,

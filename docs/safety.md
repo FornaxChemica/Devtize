@@ -1,6 +1,24 @@
 # Safety And Threat Model
 
-Phase D.2 keeps the existing read-only and repository behavior and adds bounded GitHub CLI knowledge synchronization beside Git. `find` searches in-memory builtin and independently loaded cached knowledge and has no process runner dependency. `doctor` reads bounded per-provider cache metadata and project evidence, then runs only fixed version probes. `status` is offline unless live verification is explicitly requested, and `history` reads bounded local records. Repository, commit, and sync dry-runs perform no intended persistent mutation.
+Phase D.3 keeps the existing read-only and repository behavior, adds bounded JavaScript/TypeScript project evidence, and does not add an execution path. `find` searches in-memory builtin and independently loaded cached knowledge and has no process runner dependency. `doctor` reads bounded per-provider cache metadata and project evidence, then runs only the existing fixed Git and `gh` version probes. `status` is offline unless live verification is explicitly requested, and `history` reads bounded local records. Repository, commit, and sync dry-runs perform no intended persistent mutation.
+
+## Project Filesystem Boundary
+
+Project markers, paths, and package manifests are untrusted. Detection inspects
+at most 64 ancestors and 16 manifests, reads at most 1 MiB per manifest, and
+does not recurse into workspace members or expand workspace globs. Non-Git
+markers must be regular non-symlink files; unsafe, malformed, trailing,
+oversized, excessively nested, or unreadable inputs become bounded diagnostics
+with fixed safe messages. Package-manager versions are accepted only as
+bounded control-free metadata for `npm`, `pnpm`, `yarn`, or `bun` and are never
+interpreted as semantic-version requirements.
+
+Ambiguity never authorizes a choice: distinct managers, invalid controlling
+metadata, and conflicting declarations lower confidence and produce rejected
+alternatives plus a resolution hint. `package.json` alone does not imply npm.
+The selected value is display-only. Detection never invokes Node, Bun, Deno,
+npm, pnpm, Yarn, Corepack, package scripts, or project files and never writes
+configuration, cache, history, or project state.
 
 ## Process Boundary
 

@@ -1,0 +1,43 @@
+case unambiguous
+- Devtize doctor: ok
+config: valid
+project: detected (/work/app, confidence high, ambiguous false)
+runtimes: javascript, node
+package manager: pnpm@10.0.0; confidence high
+registry: available (builtin_only; 12 reviewed builtin entries)
+case ambiguous
+! Devtize doctor: warning
+config: valid
+project: detected (/work/app, confidence high, ambiguous true)
+runtimes: bun, javascript
+package manager: bun@1.2.0; confidence low
+alternative: lockfile yarn (conflicts_with_selected)
+hint: Use one supported packageManager declaration and align recognized
+      lockfiles with it.
+registry: available (builtin_only; 12 reviewed builtin entries)
+case monorepo
+- Devtize doctor: ok
+config: valid
+project: detected (/work/packages/app, confidence high, ambiguous false)
+workspace: /work
+runtimes: javascript, typescript
+package manager: pnpm@10.0.0; confidence high
+registry: available (builtin_only; 12 reviewed builtin entries)
+case malformed
+! Devtize doctor: warning
+config: valid
+project: detected (/work/app, confidence medium, ambiguous false)
+runtimes: javascript
+package manager: unresolved
+warning: manifest_invalid: package manifest is not one valid bounded JSON object
+         (package.json)
+hint: Declare packageManager in package.json or add one recognized lockfile.
+registry: available (builtin_only; 12 reviewed builtin entries)
+case unresolved
+- Devtize doctor: ok
+config: valid
+project: detected (/work/app, confidence medium, ambiguous false)
+runtimes: javascript
+package manager: unresolved
+hint: Declare packageManager in package.json or add one recognized lockfile.
+registry: available (builtin_only; 12 reviewed builtin entries)

@@ -316,6 +316,40 @@ func TestDoctorReportsStableStates(t *testing.T) {
 	if response.Tools[0].ProviderID != "gh" || response.Tools[0].AuthStatus != "auth_unknown" {
 		t.Fatalf("unexpected gh result: %#v", response.Tools[0])
 	}
+	if runner.calls != 2 {
+		t.Fatalf("doctor process calls = %d, want exactly Git and gh version checks", runner.calls)
+	}
+}
+
+func TestDoctorJSONIncludesAdditiveJavaScriptDetectionFields(t *testing.T) {
+	runner := &spyRunner{}
+	deps := testDependencies(t, runner)
+	workspace := filepath.Join(deps.workingDir, "workspace")
+	projectRoot := filepath.Join(workspace, "packages", "app")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(`{"workspaces":["packages/*"],"packageManager":"pnpm@10.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "package.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps.workingDir = projectRoot
+	stdout, _, err := execute(t, deps, "--json", "doctor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response app.DoctorResponse
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.SchemaVersion != 1 || response.Project.WorkspaceRoot != workspace || response.Project.PackageManager != "pnpm" || response.Project.PackageManagerVersion != "10.0.0" || response.Project.PackageManagerConfidence != detect.ConfidenceHigh {
+		t.Fatalf("response = %#v", response)
+	}
+	if runner.calls != 2 || strings.Contains(stdout, "\x1b[") {
+		t.Fatalf("calls=%d output=%q", runner.calls, stdout)
+	}
 }
 
 func TestDoctorReportsInvalidConfigWithoutUsingItsValues(t *testing.T) {

@@ -1,5 +1,15 @@
 # Compatibility Notes
 
+## Phase D.3
+
+Phase D.3 preserves the schema-version-1 project fields and adds optional
+`workspace_root`, package-manager version/confidence, rejected alternatives,
+resolution hints, diagnostics, and evidence scope. Existing Go, Git, `gh`,
+registry, configuration, cache, and history behavior remains compatible.
+`dvz doctor` still invokes only the existing Git and `gh` probes. JavaScript,
+TypeScript, Node, Bun, Deno, npm, pnpm, Yarn, and Bun package-manager results
+describe project evidence only and grant no executable or setup support.
+
 ## Phase D.2
 
 Phase D.2 adds `dvz sync gh`, `find --provider git|gh`, GitHub CLI command

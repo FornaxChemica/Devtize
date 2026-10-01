@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	golangadapter "github.com/FornaxChemica/devtize/internal/adapters/golang"
@@ -76,9 +77,48 @@ func (r *Renderer) Doctor(response app.DoctorResponse) {
 	r.heading("Devtize doctor", response.Status)
 	r.field("config", response.Config.Status)
 	if response.Project.Status == "detected" {
-		r.field("project", fmt.Sprintf("detected (%s, confidence %s, ambiguous %t)", response.Project.Root, response.Project.Confidence, response.Project.Ambiguous))
+		r.field("project", fmt.Sprintf("detected (%s, confidence %s, ambiguous %t)", safeHumanText(response.Project.Root), response.Project.Confidence, response.Project.Ambiguous))
+		if response.Project.WorkspaceRoot != "" && response.Project.WorkspaceRoot != response.Project.Root {
+			r.field("workspace", safeHumanText(response.Project.WorkspaceRoot))
+		}
+		if len(response.Project.Runtimes) > 0 {
+			r.field("runtimes", safeHumanText(strings.Join(response.Project.Runtimes, ", ")))
+		} else {
+			r.field("runtimes", "none detected")
+		}
+		manager := "unresolved"
+		if response.Project.PackageManager != "" {
+			manager = response.Project.PackageManager
+			if response.Project.PackageManagerVersion != "" {
+				manager += "@" + response.Project.PackageManagerVersion
+			}
+		}
+		if response.Project.PackageManagerConfidence != "" {
+			manager += "; confidence " + string(response.Project.PackageManagerConfidence)
+		}
+		r.field("package manager", safeHumanText(manager))
+		for _, alternative := range response.Project.RejectedAlternatives {
+			r.field("alternative", safeHumanText(fmt.Sprintf("%s %s (%s)", alternative.Kind, alternative.Value, alternative.Reason)))
+		}
+		for _, diagnostic := range response.Project.Diagnostics {
+			message := diagnostic.Code + ": " + diagnostic.Message
+			if diagnostic.Path != "" {
+				message += " (" + diagnostic.Path + ")"
+			}
+			r.warning(safeHumanText(message))
+		}
+		if response.Project.ResolutionHint != "" {
+			r.field("hint", safeHumanText(response.Project.ResolutionHint))
+		}
 	} else {
 		r.field("project", "not found")
+		for _, diagnostic := range response.Project.Diagnostics {
+			message := diagnostic.Code + ": " + diagnostic.Message
+			if diagnostic.Path != "" {
+				message += " (" + diagnostic.Path + ")"
+			}
+			r.warning(safeHumanText(message))
+		}
 	}
 	for _, tool := range response.Tools {
 		value := string(tool.Status)
@@ -108,6 +148,15 @@ func (r *Renderer) Doctor(response app.DoctorResponse) {
 	for _, warning := range response.Registry.Warnings {
 		r.warning(warning)
 	}
+}
+
+func safeHumanText(value string) string {
+	return strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) {
+			return '?'
+		}
+		return character
+	}, value)
 }
 
 func (r *Renderer) Find(response app.FindResponse) {

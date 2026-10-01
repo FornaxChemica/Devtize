@@ -74,6 +74,9 @@ func (s DoctorService) Run(ctx context.Context, configCheck ConfigCheck) (Doctor
 	if project.Status == "not_found" && response.Status == "ok" {
 		response.Status = "warning"
 	}
+	if (project.Ambiguous || hasWarningDiagnostic(project.Diagnostics)) && response.Status == "ok" {
+		response.Status = "warning"
+	}
 
 	specs := []detect.ToolSpec{
 		{ProviderID: "git", Executable: "git", VersionArgs: []string{"--version"}, MinimumVersion: "2.23.0", WorkingDir: s.WorkingDir},
@@ -95,6 +98,15 @@ func (s DoctorService) Run(ctx context.Context, configCheck ConfigCheck) (Doctor
 		response.Status = "warning"
 	}
 	return response, nil
+}
+
+func hasWarningDiagnostic(diagnostics []detect.Diagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == "warning" {
+			return true
+		}
+	}
+	return false
 }
 
 func addRegistryProvider(check RegistryCheck, s DoctorService, installation detect.ToolInstallation) RegistryCheck {

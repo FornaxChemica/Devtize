@@ -1,15 +1,172 @@
 package integration_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestBuiltBinaryDoctorJavaScriptDetectionIsReadOnly(t *testing.T) {
+	root := filepath.Clean("..")
+	binary := filepath.Join(t.TempDir(), "dvz")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dvz")
+	build.Dir = root
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dvz: %v\n%s", err, output)
+	}
+
+	fakeDir := t.TempDir()
+	gitLog := filepath.Join(t.TempDir(), "git.log")
+	ghLog := filepath.Join(t.TempDir(), "gh.log")
+	buildFakeGit(t, fakeDir, gitLog, filepath.Join(t.TempDir(), "unused-control"))
+	buildFakeGH(t, fakeDir, ghLog)
+	sentinelLog := filepath.Join(t.TempDir(), "ecosystem.log")
+	buildEcosystemSentinels(t, fakeDir, sentinelLog)
+
+	workspace := t.TempDir()
+	writeIntegrationFile(t, filepath.Join(workspace, "package.json"), `{"workspaces":["packages/*"],"packageManager":"pnpm@10.0.0"}`)
+	writeIntegrationFile(t, filepath.Join(workspace, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n")
+	project := filepath.Join(workspace, "packages", "app")
+	writeIntegrationFile(t, filepath.Join(project, "package.json"), `{"engines":{"node":">=22"}}`)
+	writeIntegrationFile(t, filepath.Join(project, "tsconfig.json"), `{}`)
+	before := snapshotTree(t, workspace)
+
+	home := t.TempDir()
+	configHome := filepath.Join(home, "config-not-created")
+	cacheHome := filepath.Join(home, "cache-not-created")
+	command := exec.Command(binary, "--json", "doctor")
+	command.Dir = project
+	command.Env = append(os.Environ(),
+		"PATH="+fakeDir,
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+configHome,
+		"XDG_CACHE_HOME="+cacheHome,
+		"NO_COLOR=1",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), `"schema_version": 1`) || !strings.Contains(string(output), `"workspace_root":`) || !strings.Contains(string(output), `"package_manager": "pnpm"`) || strings.Contains(string(output), "\x1b[") {
+		t.Fatalf("doctor output: %s", output)
+	}
+	after := snapshotTree(t, workspace)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("doctor changed project tree\nbefore=%v\nafter=%v", before, after)
+	}
+	if _, err := os.Stat(configHome); !os.IsNotExist(err) {
+		t.Fatalf("doctor created config state: %v", err)
+	}
+	if _, err := os.Stat(cacheHome); !os.IsNotExist(err) {
+		t.Fatalf("doctor created cache state: %v", err)
+	}
+	if calls, err := os.ReadFile(gitLog); err != nil || string(calls) != "--version\n" {
+		t.Fatalf("Git calls=%q err=%v", calls, err)
+	}
+	if calls, err := os.ReadFile(ghLog); err != nil || string(calls) != "--version\n" {
+		t.Fatalf("gh calls=%q err=%v", calls, err)
+	}
+	if calls, err := os.ReadFile(sentinelLog); !os.IsNotExist(err) {
+		t.Fatalf("ecosystem executable was invoked: calls=%q err=%v", calls, err)
+	}
+}
+
+func buildEcosystemSentinels(t *testing.T, directory, logPath string) {
+	t.Helper()
+	source := fmt.Sprintf(`package main
+import("fmt";"os")
+func main(){f,err:=os.OpenFile(%q,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if err!=nil{panic(err)};fmt.Fprintln(f,os.Args[0]);f.Close();os.Exit(90)}
+`, logPath)
+	sourcePath := filepath.Join(directory, "ecosystem_sentinel.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	template := filepath.Join(directory, "ecosystem-sentinel")
+	if runtime.GOOS == "windows" {
+		template += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", template, sourcePath)
+	command.Env = os.Environ()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build ecosystem sentinel: %v\n%s", err, output)
+	}
+	for _, name := range []string{"node", "bun", "deno", "npm", "pnpm", "yarn", "corepack"} {
+		target := filepath.Join(directory, name)
+		if runtime.GOOS == "windows" {
+			target += ".exe"
+		}
+		if err := copyIntegrationFile(template, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(template); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyIntegrationFile(source, target string) error {
+	content, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, content, 0o755)
+}
+
+func writeIntegrationFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snapshot := make(map[string]string)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		value := info.Mode().String()
+		if info.Mode().IsRegular() {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			value += fmt.Sprintf(":%x", sha256.Sum256(content))
+		}
+		snapshot[filepath.ToSlash(relative)] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
 
 func TestBuiltBinaryGitKnowledgeSyncAndOfflineFind(t *testing.T) {
 	root := filepath.Clean("..")

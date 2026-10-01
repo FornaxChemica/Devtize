@@ -1,0 +1,12 @@
+! Devtize doctor: warning
+config: valid
+project: detected (/workspace/Devtize/packages/web, confidence high, ambiguous true)
+workspace: /workspace/Devtize
+runtimes: javascript, node, typescript
+package manager: pnpm@10.0.0; confidence low
+alternative: lockfile yarn (conflicts_with_selected)
+warning: manifest_invalid: package manifest is not one valid bounded JSON object (packages/web/package.json)
+hint: Use one supported packageManager declaration and align recognized lockfiles with it.
+gh: installed 2.93.0
+git: installed 2.50.1
+registry: available (builtin_only; 12 reviewed builtin entries)

@@ -1,11 +1,11 @@
 # Devtize
 
-Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides completed Phase B self-hosting, Phase C daily Git workflows, and Phase D.2 version-aware Git and GitHub CLI discovery: it can inspect repository status, read redacted history, search reviewed and locally synchronized knowledge offline, publish a repository, create commits guarded by reviewed Go checks, push through a separate authorization boundary, and inspect constrained undo eligibility without mutation. The project is pre-release and its public interfaces may still change.
+Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides completed Phase B self-hosting, Phase C daily Git workflows, Phase D.2 version-aware Git and GitHub CLI discovery, and Phase D.3 read-only JavaScript/TypeScript project evidence detection: it can inspect repository and project status, read redacted history, search reviewed and locally synchronized knowledge offline, publish a repository, create commits guarded by reviewed Go checks, push through a separate authorization boundary, and inspect constrained undo eligibility without mutation. The project is pre-release and its public interfaces may still change.
 
 ## Current Features
 
 - `dvz version` reports deterministic build metadata.
-- `dvz doctor` checks configuration, project evidence, Git, GitHub CLI, and builtin/synchronized registry state without making changes.
+- `dvz doctor` checks configuration, bounded project/workspace evidence, Git, GitHub CLI, and builtin/synchronized registry state without making changes. JavaScript/TypeScript detection reports Node, Bun, Deno, manager metadata/locks, conflicts, diagnostics, and resolution hints without invoking ecosystem tools.
 - `dvz find [--provider git|gh] <intent>` searches reviewed builtins plus independent valid local snapshots offline and never executes a result.
 - `dvz sync git|gh [--dry-run]` validates one bounded official local help source and, after exact confirmation, publishes discovery-only knowledge to an immutable provider cache.
 - `dvz status` reports daily Git state offline; `--remote` adds an explicit live check without fetching.
@@ -133,8 +133,10 @@ With no paths, message, or check overrides, `dvz ship` preserves the push-only w
 | GitHub CLI discovery | discoverable | Optional version-matched `gh help reference` snapshot; nested paths, aliases, usage, and flags |
 | GitHub CLI (`gh`) reviewed capabilities | workflow-ready | Narrow auth preflight, repository creation, and guarded description updates; synchronized knowledge grants no authority |
 | Go projects | detected | `go.mod` evidence |
-| JavaScript projects | detected | Metadata and recognized lockfile evidence |
-| Other runtimes and tools | planned | Not implemented |
+| JavaScript/TypeScript projects | detected | Nearest project/workspace, generic JS, TypeScript, Node, Bun, and Deno file/metadata evidence |
+| npm, pnpm, Yarn, and Bun package managers | detected | Safe `packageManager`, workspace, and lockfile evidence only; no executable/version probe or setup |
+| Node, Bun, and Deno executables | planned | Project evidence is detected, but installation/version detection and execution are unavailable |
+| Other runtimes and tools | planned | Python, Rust, Java, Ruby, and other ecosystem detection are not implemented |
 
 Support levels progress through `planned`, `detected`, `discoverable`, `executable`, and `workflow-ready`. Detection never implies execution support.
 
@@ -143,6 +145,8 @@ Support levels progress through `planned`, `detected`, `discoverable`, `executab
 All Phase A behavior works without AI, network access, hosted services, telemetry, or remote credentials. AI remains disabled in the schema. Ollama and user-provided compatible endpoints are roadmap items and will require explicit configuration and documented context controls before they can receive data.
 
 The reviewed built-in catalog is always available offline. Git sync invokes only `git help --all --no-external-commands --no-aliases --verbose`; GitHub CLI sync invokes only `gh help reference`. Both use isolated, bounded environments, perform no documentation download, and publish only after an immutable local-write plan receives the exact response `sync`. `dvz find` reads caches without invoking either tool. User aliases, extensions, auth state, tokens, custom hosts, editors, browsers, and network docs are excluded. Synced help remains untrusted discovery data and can never create an executable capability. See [Registry](docs/registry.md).
+
+Project detection is also local and read-only. It inspects regular non-symlink markers and at most 64 ancestors, 16 package manifests, and 1 MiB per manifest. It does not expand workspace globs, recurse through members, run lifecycle scripts, or invoke `node`, `bun`, `deno`, `npm`, `pnpm`, `yarn`, or Corepack. See [Project Detection](docs/project-detection.md).
 
 ## Configuration
 
@@ -222,7 +226,7 @@ Phase B is complete. It adds reviewed Git and GitHub adapters and an immutable p
 
 Do not run manual `git init`, `git add`, `git commit`, `gh repo create`, `git remote add`, or `git push` in this folder. After the maintainer-run milestone completes, sanitized evidence should be recorded in `docs/self-hosting.md`.
 
-Phase C includes constrained, read-only undo planning. Phase D.2 adds independent Git and GitHub CLI local-help snapshots, provider-filtered search, and non-authoritative GitHub CLI aliases, usage, and flags. Runtime/package-manager providers, `explain`, cheatsheets, automatic sync, and opt-in official network documentation remain later work. Executable local compensation, pushed-commit revert, pull-request creation, optional AI, a TUI, and MCP remain separate future authorization boundaries.
+Phase C includes constrained, read-only undo planning. Phase D.2 adds independent Git and GitHub CLI local-help snapshots, provider-filtered search, and non-authoritative GitHub CLI aliases, usage, and flags. Phase D.3 adds bounded JavaScript/TypeScript project and package-manager evidence to `doctor`; executable/version detection, setup, installation, lifecycle scripts, and command knowledge for those tools remain later work. `explain`, cheatsheets, automatic sync, opt-in official network documentation, executable local compensation, pushed-commit revert, pull-request creation, optional AI, a TUI, and MCP remain separate future authorization boundaries.
 
 ## Contributing, Security, And License
 
