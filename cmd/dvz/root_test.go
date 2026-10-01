@@ -104,17 +104,67 @@ func (r *syncCLIRunner) Run(_ context.Context, spec devprocess.CommandSpec) (dev
 	r.calls++
 	switch strings.Join(spec.Args, " ") {
 	case "--version":
+		if strings.Contains(spec.Executable, "gh") {
+			return devprocess.CommandResult{Executable: "/tools/gh", Stdout: "gh version 2.93.0"}, nil
+		}
 		return devprocess.CommandResult{Executable: "/tools/git", Stdout: "git version 2.50.1"}, nil
 	case "help --all --no-external-commands --no-aliases --verbose":
 		if spec.Executable != "/tools/git" || spec.Stdin != devprocess.StdinDisabled || spec.CaptureLimit != 1<<20 {
 			r.t.Fatalf("unsafe sync help spec: %#v", spec)
 		}
 		return devprocess.CommandResult{Executable: "/tools/git", Stdout: "Main Porcelain Commands\n   status                  Show the working tree status\n   config                  Get and set repository or global options\n"}, nil
+	case "help reference":
+		return devprocess.CommandResult{Executable: "/tools/gh", Stdout: cliGHReference}, nil
 	default:
 		r.t.Fatalf("unexpected sync subprocess: %s %#v", spec.Executable, spec.Args)
 		return devprocess.CommandResult{}, nil
 	}
 }
+
+const cliGHReference = `# gh reference
+
+## gh api
+
+Make an authenticated GitHub API request
+
+## gh auth <command>
+
+Authenticate GitHub CLI
+
+### gh auth login [flags]
+
+Log in to GitHub
+
+## gh issue <command>
+
+Work with issues
+
+### gh issue create [flags]
+
+Create an issue
+
+## gh pr <command>
+
+Work with pull requests
+
+### gh pr create [flags]
+
+Create a pull request
+
+Aliases
+
+gh pr new
+
+  -w, --web   Open a browser
+
+## gh repo <command>
+
+Work with repositories
+
+### gh repo create [flags]
+
+Create a repository
+`
 
 func syncDependencies(t *testing.T, runner detect.Runner) (dependencies, string) {
 	t.Helper()
@@ -222,6 +272,34 @@ func TestSyncDryRunAndConfirmedCacheReuseRemainReadOnlyDuringFind(t *testing.T) 
 	}
 }
 
+func TestGitHubSyncAndProviderFilteredFindStayOffline(t *testing.T) {
+	runner := &syncCLIRunner{t: t}
+	deps, _ := syncDependencies(t, runner)
+	stdout, stderr, err := executeInput(t, deps, "sync\n", "--json", "sync", "gh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response app.SyncResponse
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Provider != "gh" || response.PublishedCount != 9 || response.PublishedAliasCount != 1 || response.PublishedFlagCount != 1 || !strings.Contains(stderr, "Type sync to continue") {
+		t.Fatalf("response=%#v stderr=%q", response, stderr)
+	}
+	runner.calls = 0
+	stdout, _, err = execute(t, deps, "--json", "find", "--provider", "gh", "gh", "pr", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found app.FindResponse
+	if err := json.Unmarshal([]byte(stdout), &found); err != nil {
+		t.Fatal(err)
+	}
+	if found.Provider != "gh" || len(found.Results) == 0 || found.Results[0].Command != "gh pr create" || found.Results[0].MatchedField != "alias" || runner.calls != 0 {
+		t.Fatalf("found=%#v calls=%d", found, runner.calls)
+	}
+}
+
 func TestDoctorReportsStableStates(t *testing.T) {
 	runner := &spyRunner{}
 	stdout, _, err := execute(t, testDependencies(t, runner), "--json", "doctor")
@@ -274,6 +352,17 @@ func TestInvalidUseAndJSONErrorMapping(t *testing.T) {
 	}
 	if exitCode(wrapped) != exitInvalid {
 		t.Fatalf("exit code = %d", exitCode(wrapped))
+	}
+}
+
+func TestSyncRequiresExactlyOneSupportedProvider(t *testing.T) {
+	deps := testDependencies(t, &spyRunner{})
+	for _, args := range [][]string{{"sync"}, {"sync", "git", "gh"}, {"sync", "docker"}} {
+		_, _, err := execute(t, deps, args...)
+		var operational *app.Error
+		if !errors.As(err, &operational) || operational.Code != app.CodeInvalidUsage || !strings.Contains(operational.Hint, "sync git") || !strings.Contains(operational.Hint, "sync gh") {
+			t.Fatalf("args=%v err=%#v", args, err)
+		}
 	}
 }
 

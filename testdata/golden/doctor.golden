@@ -4,3 +4,5 @@ project: not found
 gh: installed 2.80.0; auth auth_unknown
 git: installed 2.51.0
 registry: available (builtin_only; 12 reviewed builtin entries)
+registry gh: not_synced; 0 entries; installed 2.80.0
+registry git: not_synced; 0 entries; installed 2.51.0

@@ -1,6 +1,6 @@
 # Architecture
 
-Phase D.1 builds on the Phase A read-only paths, Phase B repository workflows, and Phase C daily commands with Git-only version-aware discovery sync:
+Phase D.2 builds on the Phase A read-only paths, Phase B repository workflows, and Phase C daily commands with independent Git and GitHub CLI version-aware discovery sync:
 
 ```text
 cmd/dvz -> internal/app -> internal/search -> internal/registry -> registry/builtin
@@ -27,7 +27,7 @@ Configuration is loaded before command behavior and is passed as typed state. Do
 
 ## Trust Boundary
 
-CLI input, config files, project markers, executable output, cache files, and registry descriptions are data, not instructions. Tool detection invokes only fixed version arguments through the process runner. Git sync excludes aliases and external commands, accepts only reviewed help sections and normalized depth-one names, and never invokes a discovered name. Knowledge returned by `dvz find` contains no callback, executable adapter, validator, or authorization state and cannot be promoted to execution.
+CLI input, config files, project markers, executable output, cache files, and registry descriptions are data, not instructions. Tool detection invokes only fixed version arguments through the process runner. Git sync accepts reviewed depth-one inventory rows. GitHub CLI sync parses bounded depth-two `##`/`###` headings, aliases, usage, and fixed-column flags from only `gh help reference`; over-depth sections are excluded. Each provider owns its parser and cache validation, and one corrupt cache cannot hide another. Neither sync path invokes a discovered name. Knowledge returned by `dvz find` contains no callback, executable adapter, validator, or authorization state and cannot be promoted to execution.
 
 Mutations enter through application services, immutable typed plans, safety policy, reviewed adapters, postcondition checks, and redacted history. `dvz repo create` groups local-write confirmation separately from remote repository creation and push. Unexpected remotes, detached HEAD, incompatible GitHub repositories, missing auth, and likely secret selections stop before unsafe mutation. The narrow unpublished-initial-commit repair remains in the repository application service and adapter boundary; it is not a general history-editing workflow.
 

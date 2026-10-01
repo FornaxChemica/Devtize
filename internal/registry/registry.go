@@ -19,6 +19,20 @@ const (
 	SupportDiscoverable SupportLevel = "discoverable"
 )
 
+type CommandKind string
+
+const (
+	CommandKindGroup   CommandKind = "group"
+	CommandKindCommand CommandKind = "command"
+)
+
+type FlagKnowledge struct {
+	LongName  string `json:"long_name" yaml:"long_name"`
+	ShortName string `json:"short_name,omitempty" yaml:"short_name,omitempty"`
+	ValueHint string `json:"value_hint,omitempty" yaml:"value_hint,omitempty"`
+	Summary   string `json:"summary" yaml:"summary"`
+}
+
 type KnowledgeSource struct {
 	Kind          string    `json:"kind" yaml:"kind"`
 	Locator       string    `json:"locator" yaml:"locator"`
@@ -50,6 +64,9 @@ type CommandKnowledge struct {
 	ProviderID    string          `json:"provider" yaml:"provider"`
 	CommandPath   []string        `json:"command_path" yaml:"command_path"`
 	Summary       string          `json:"summary" yaml:"summary"`
+	Kind          CommandKind     `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Usage         string          `json:"usage,omitempty" yaml:"usage,omitempty"`
+	Flags         []FlagKnowledge `json:"flags,omitempty" yaml:"flags,omitempty"`
 	Aliases       []string        `json:"aliases,omitempty" yaml:"aliases,omitempty"`
 	IntentPhrases []string        `json:"intent_phrases,omitempty" yaml:"intent_phrases,omitempty"`
 	Examples      []string        `json:"examples,omitempty" yaml:"examples,omitempty"`
@@ -83,6 +100,20 @@ func (k CommandKnowledge) Validate() error {
 	if strings.TrimSpace(k.Summary) == "" {
 		return fmt.Errorf("%s: summary is required", k.ID)
 	}
+	if len(k.Summary) > 1024 || !validDisplayText(k.Summary) {
+		return fmt.Errorf("%s: summary exceeds discovery metadata limits", k.ID)
+	}
+	if k.Kind != "" && k.Kind != CommandKindGroup && k.Kind != CommandKindCommand {
+		return fmt.Errorf("%s: invalid command kind %q", k.ID, k.Kind)
+	}
+	if len(k.Usage) > 1024 || !validDisplayText(k.Usage) {
+		return fmt.Errorf("%s: usage exceeds discovery metadata limits", k.ID)
+	}
+	for _, flag := range k.Flags {
+		if err := flag.Validate(); err != nil {
+			return fmt.Errorf("%s: %w", k.ID, err)
+		}
+	}
 	if !k.Risk.Valid() && !(k.Source.Kind == "sync" && k.Risk == safety.Risk("unclassified")) {
 		return fmt.Errorf("%s: invalid risk %q", k.ID, k.Risk)
 	}
@@ -111,6 +142,52 @@ func (k CommandKnowledge) Validate() error {
 		return fmt.Errorf("%s: command knowledge must be discoverable only", k.ID)
 	}
 	return nil
+}
+
+func (f FlagKnowledge) Validate() error {
+	if !validLongFlagName(f.LongName) {
+		return fmt.Errorf("invalid long flag name %q", f.LongName)
+	}
+	if f.ShortName != "" && !validShortFlagName(f.ShortName) {
+		return fmt.Errorf("invalid short flag name %q", f.ShortName)
+	}
+	if len(f.LongName) > 128 || len(f.ShortName) > 128 || len(f.ValueHint) > 1024 || len(f.Summary) > 1024 {
+		return fmt.Errorf("flag %q exceeds discovery metadata limits", f.LongName)
+	}
+	if strings.TrimSpace(f.Summary) == "" || !validDisplayText(f.Summary) || !validDisplayText(f.ValueHint) {
+		return fmt.Errorf("flag %q has invalid display metadata", f.LongName)
+	}
+	return nil
+}
+
+func validDisplayText(value string) bool {
+	for _, current := range value {
+		if current == '\x1b' || current < 0x20 || current == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validLongFlagName(value string) bool {
+	if len(value) < 3 || !strings.HasPrefix(value, "--") {
+		return false
+	}
+	for index, current := range value[2:] {
+		if current >= 'a' && current <= 'z' || current >= '0' && current <= '9' && index > 0 || current == '-' && index > 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validShortFlagName(value string) bool {
+	if len(value) != 2 || value[0] != '-' {
+		return false
+	}
+	current := value[1]
+	return current >= 'a' && current <= 'z' || current >= 'A' && current <= 'Z' || current >= '0' && current <= '9'
 }
 
 type Catalog struct {

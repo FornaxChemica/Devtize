@@ -29,6 +29,10 @@ type Result struct {
 	VersionStatus string                   `json:"version_status"`
 	Confidence    Confidence               `json:"confidence"`
 	MatchReason   string                   `json:"match_reason"`
+	Kind          registry.CommandKind     `json:"kind,omitempty"`
+	Usage         string                   `json:"usage,omitempty"`
+	Flags         []registry.FlagKnowledge `json:"flags,omitempty"`
+	MatchedField  string                   `json:"matched_field,omitempty"`
 	Score         int                      `json:"-"`
 }
 
@@ -41,6 +45,10 @@ func New(commands []registry.CommandKnowledge) *Engine {
 }
 
 func (e *Engine) Find(query string, limit int) []Result {
+	return e.FindProvider(query, "", limit)
+}
+
+func (e *Engine) FindProvider(query, provider string, limit int) []Result {
 	query = normalize(query)
 	if query == "" {
 		return nil
@@ -51,7 +59,10 @@ func (e *Engine) Find(query string, limit int) []Result {
 
 	var results []Result
 	for _, command := range e.commands {
-		score, confidence, reason := score(command, query)
+		if provider != "" && command.ProviderID != provider {
+			continue
+		}
+		score, confidence, reason, matchedField := score(command, query)
 		if score == 0 {
 			continue
 		}
@@ -60,6 +71,7 @@ func (e *Engine) Find(query string, limit int) []Result {
 			Provider: command.ProviderID, Source: command.Source, Risk: command.Risk,
 			Effects: append([]string(nil), command.Effects...), VersionRange: command.VersionRange,
 			VersionStatus: versionStatus(command), Confidence: confidence, MatchReason: reason, Score: score,
+			Kind: command.Kind, Usage: command.Usage, Flags: append([]registry.FlagKnowledge(nil), command.Flags...), MatchedField: matchedField,
 		})
 	}
 	sort.Slice(results, func(i, j int) bool {
@@ -68,6 +80,9 @@ func (e *Engine) Find(query string, limit int) []Result {
 		}
 		if sourcePriority(results[i].Source.Kind) != sourcePriority(results[j].Source.Kind) {
 			return sourcePriority(results[i].Source.Kind) < sourcePriority(results[j].Source.Kind)
+		}
+		if results[i].Provider != results[j].Provider {
+			return results[i].Provider < results[j].Provider
 		}
 		return results[i].ID < results[j].ID
 	})
@@ -91,46 +106,61 @@ func sourcePriority(kind string) int {
 	return 1
 }
 
-func score(command registry.CommandKnowledge, query string) (int, Confidence, string) {
+func score(command registry.CommandKnowledge, query string) (int, Confidence, string, string) {
 	commandText := normalize(command.Command())
 	if query == commandText {
-		return 1000, ConfidenceHigh, "exact command path"
+		return 1000, ConfidenceHigh, "exact command path", evidence(command, "command_path")
 	}
-	for _, phrase := range append(append([]string{}, command.Aliases...), command.IntentPhrases...) {
+	for _, alias := range command.Aliases {
+		if query == normalize(alias) {
+			if command.Kind != "" {
+				return 950, ConfidenceHigh, "exact alias", "alias"
+			}
+			return 900, ConfidenceHigh, "exact reviewed phrase", ""
+		}
+	}
+	for _, phrase := range command.IntentPhrases {
 		if query == normalize(phrase) {
-			return 900, ConfidenceHigh, "exact reviewed phrase"
+			return 900, ConfidenceHigh, "exact reviewed phrase", ""
+		}
+	}
+	for _, flag := range command.Flags {
+		if query == normalize(flag.LongName) || flag.ShortName != "" && query == normalize(flag.ShortName) {
+			return 850, ConfidenceHigh, "exact flag name", "flag:" + flag.LongName
 		}
 	}
 
 	queryTokens := strings.Fields(query)
-	fields := []string{command.Command(), command.Summary}
-	fields = append(fields, command.Aliases...)
-	fields = append(fields, command.IntentPhrases...)
-	searchText := normalize(strings.Join(fields, " "))
-	searchTokens := strings.Fields(searchText)
-	all, prefix := true, false
-	for _, wanted := range queryTokens {
-		matched := false
-		for _, candidate := range searchTokens {
-			if candidate == wanted {
-				matched = true
-				break
-			}
-			if strings.HasPrefix(candidate, wanted) || strings.HasPrefix(wanted, candidate) {
-				matched, prefix = true, true
-				break
-			}
-		}
-		if !matched {
-			all = false
-			break
-		}
-	}
+	coreFields := []string{command.Command(), command.Summary}
+	coreFields = append(coreFields, command.Aliases...)
+	coreFields = append(coreFields, command.IntentPhrases...)
+	coreTokens := strings.Fields(normalize(strings.Join(coreFields, " ")))
+	all, prefix := tokenMatch(queryTokens, coreTokens)
 	if all && !prefix {
-		return 700 + len(queryTokens), ConfidenceMedium, "all query tokens matched"
+		score := 700 + len(queryTokens)
+		if command.Kind == registry.CommandKindGroup {
+			score -= 20
+		}
+		return score, ConfidenceMedium, "all query tokens matched", evidence(command, "command_or_summary")
 	}
 	if all {
-		return 500 + len(queryTokens), ConfidenceMedium, "prefix token match"
+		score := 500 + len(queryTokens)
+		if command.Kind == registry.CommandKindGroup {
+			score -= 20
+		}
+		return score, ConfidenceMedium, "prefix token match", evidence(command, "command_or_summary")
+	}
+	var flagFields []string
+	for _, flag := range command.Flags {
+		flagFields = append(flagFields, flag.LongName, flag.ShortName, flag.ValueHint, flag.Summary)
+	}
+	flagTokens := strings.Fields(normalize(strings.Join(flagFields, " ")))
+	all, prefix = tokenMatch(queryTokens, append(append([]string(nil), coreTokens...), flagTokens...))
+	if all && !prefix {
+		return 650 + len(queryTokens), ConfidenceMedium, "flag metadata token match", matchedFlagEvidence(command, queryTokens)
+	}
+	if all {
+		return 450 + len(queryTokens), ConfidenceMedium, "flag metadata prefix match", matchedFlagEvidence(command, queryTokens)
 	}
 
 	fuzzy := true
@@ -140,7 +170,7 @@ func score(command registry.CommandKnowledge, query string) (int, Confidence, st
 			break
 		}
 		matched := false
-		for _, candidate := range searchTokens {
+		for _, candidate := range coreTokens {
 			max := 1
 			if len(wanted) > 8 {
 				max = 2
@@ -156,9 +186,54 @@ func score(command registry.CommandKnowledge, query string) (int, Confidence, st
 		}
 	}
 	if fuzzy {
-		return 300, ConfidenceLow, "conservative fuzzy match"
+		score := 300
+		if command.Kind == registry.CommandKindGroup {
+			score -= 20
+		}
+		return score, ConfidenceLow, "conservative fuzzy match", matchedFlagEvidence(command, queryTokens)
 	}
-	return 0, "", ""
+	return 0, "", "", ""
+}
+
+func tokenMatch(wantedTokens, candidateTokens []string) (bool, bool) {
+	prefix := false
+	for _, wanted := range wantedTokens {
+		matched := false
+		for _, candidate := range candidateTokens {
+			if candidate == wanted {
+				matched = true
+				break
+			}
+			if strings.HasPrefix(candidate, wanted) || strings.HasPrefix(wanted, candidate) {
+				matched = true
+				prefix = true
+				break
+			}
+		}
+		if !matched {
+			return false, false
+		}
+	}
+	return true, prefix
+}
+
+func evidence(command registry.CommandKnowledge, value string) string {
+	if command.Kind != "" {
+		return value
+	}
+	return ""
+}
+
+func matchedFlagEvidence(command registry.CommandKnowledge, query []string) string {
+	for _, flag := range command.Flags {
+		text := normalize(flag.LongName + " " + flag.ShortName + " " + flag.Summary)
+		for _, token := range query {
+			if strings.Contains(" "+text+" ", " "+token+" ") {
+				return "flag:" + flag.LongName
+			}
+		}
+	}
+	return evidence(command, "command_or_summary")
 }
 
 func normalize(value string) string {

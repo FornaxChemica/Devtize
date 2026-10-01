@@ -43,9 +43,9 @@ history file automatically.
 does not hide existing records. Reading status or history does not create a new
 history entry.
 
-Confirmed Git knowledge publication records a global `registry.sync` entry
+Confirmed Git or GitHub CLI knowledge publication records a global `registry.sync` entry
 with no project root. It stores only provider, tool version, old/new snapshot
-digests, bounded counts and limits, approval, and the typed publication result.
+digests, bounded counts and limits (including safe GitHub CLI alias/flag counts), approval, and the typed publication result.
 It never stores raw help output, synchronized descriptions, environment data,
 or repository content. Sync dry-runs and declined confirmations do not append
 history.

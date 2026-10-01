@@ -112,6 +112,40 @@ func TestSyncPlanResultWarningAndErrorGoldens(t *testing.T) {
 	}
 }
 
+func TestGitHubSyncOutputShowsSafeCountsAtSupportedWidths(t *testing.T) {
+	response := sampleSync()
+	response.Provider = "gh"
+	response.Installation = detect.ToolInstallation{Version: "2.93.0", Path: "/tools/gh"}
+	response.Parser = app.SyncParser{ID: "gh-help-reference", Version: "1"}
+	response.SourceArgv = []string{"gh", "help", "reference"}
+	response.Limits = registry.SyncLimits{MaxDepth: 2, MaxCommands: 512, MaxOutputBytes: 2 << 20, TimeoutMillis: 15_000, MaxFlags: 4096, MaxAliases: 1024}
+	response.ParsedCount = 207
+	response.ParsedAliasCount = 45
+	response.ParsedFlagCount = 916
+	for _, width := range []int{60, 80, 120} {
+		var output bytes.Buffer
+		renderer := New(&output, Options{Color: config.ColorNever, Environment: map[string]string{}, Capabilities: &Capabilities{Width: width}})
+		renderer.SyncStarted("gh")
+		renderer.SyncPlan(response)
+		result := response
+		result.Status = operation.StatusSucceeded
+		result.PublishedCount = 207
+		result.PublishedAliasCount = 45
+		result.PublishedFlagCount = 916
+		result.CacheAfter = app.SyncCacheState{Status: registry.CacheExact, Commands: 207, Aliases: 45, Flags: 916}
+		result.Result = operation.ExecutionResult{Status: operation.StatusSucceeded}
+		renderer.SyncResult(result)
+		if !strings.Contains(output.String(), "parsed aliases: 45") || !strings.Contains(output.String(), "flags: 916") || strings.Contains(output.String(), "gh auth token") {
+			t.Fatalf("width %d output=%s", width, output.String())
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n") {
+			if len([]rune(line)) > width {
+				t.Fatalf("width %d line=%q", width, line)
+			}
+		}
+	}
+}
+
 func sampleStatus() app.StatusResponse {
 	return app.StatusResponse{
 		ProjectRoot:        "/workspace/Devtize",

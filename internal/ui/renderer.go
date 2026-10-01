@@ -95,6 +95,16 @@ func (r *Renderer) Doctor(response app.DoctorResponse) {
 		entryKind = "reviewed builtin entries"
 	}
 	r.field("registry", fmt.Sprintf("%s (%s; %d %s)", response.Registry.Status, response.Registry.KnowledgeStatus, response.Registry.Entries, entryKind))
+	for _, provider := range response.Registry.Providers {
+		value := fmt.Sprintf("%s; %d entries", provider.CacheStatus, provider.Entries)
+		if provider.KnowledgeVersion != "" {
+			value += "; knowledge " + provider.KnowledgeVersion
+		}
+		if provider.DetectedVersion != "" {
+			value += "; installed " + provider.DetectedVersion
+		}
+		r.field("registry "+provider.Provider, value)
+	}
 	for _, warning := range response.Registry.Warnings {
 		r.warning(warning)
 	}
@@ -110,22 +120,45 @@ func (r *Renderer) Find(response app.FindResponse) {
 		}
 		fmt.Fprintln(r.w, r.strong(result.Command))
 		r.field("summary", result.Summary)
+		if result.Kind != "" {
+			r.field("kind", string(result.Kind))
+		}
+		if result.Usage != "" {
+			r.field("usage", result.Usage)
+		}
 		r.field("source", result.Source.Kind)
 		r.field("risk", string(result.Risk))
 		r.field("match", result.MatchReason+" ("+string(result.Confidence)+")")
+		if result.MatchedField != "" {
+			r.field("matched field", result.MatchedField)
+		}
 		r.field("versions", result.VersionRange+" ("+result.VersionStatus+")")
 		r.field("effect", strings.Join(result.Effects, "; "))
 	}
 }
 
 func (r *Renderer) SyncPlan(response app.SyncResponse) {
-	r.heading("Git knowledge sync", string(response.Status))
-	r.field("installed Git", response.Installation.Version+" ("+response.Installation.Path+")")
+	display := "Git"
+	if response.Provider == "gh" {
+		display = "GitHub CLI"
+	}
+	r.heading(display+" knowledge sync", string(response.Status))
+	r.field("installed "+display, response.Installation.Version+" ("+response.Installation.Path+")")
 	r.field("parser", response.Parser.ID+" v"+response.Parser.Version)
 	r.field("source", strings.Join(response.SourceArgv, " "))
 	r.field("limits", fmt.Sprintf("depth %d; commands %d; output %d bytes; timeout %d ms", response.Limits.MaxDepth, response.Limits.MaxCommands, response.Limits.MaxOutputBytes, response.Limits.TimeoutMillis))
+	if response.Provider == "gh" {
+		r.field("metadata limits", fmt.Sprintf("aliases %d; flags %d", response.Limits.MaxAliases, response.Limits.MaxFlags))
+	}
 	r.field("cache before", fmt.Sprintf("%s (%d commands)", response.CacheBefore.Status, response.CacheBefore.Commands))
 	r.field("parsed commands", fmt.Sprint(response.ParsedCount))
+	if response.Provider == "gh" {
+		r.field("parsed aliases", fmt.Sprint(response.ParsedAliasCount))
+		r.field("parsed flags", fmt.Sprint(response.ParsedFlagCount))
+		if len(response.AnchorSample) > 0 {
+			r.field("anchor sample", strings.Join(response.AnchorSample, ", "))
+		}
+	}
 	r.planHeader(response.Plan)
 	r.operations(response.Plan.Operations)
 	for _, warning := range response.Warnings {
@@ -133,13 +166,21 @@ func (r *Renderer) SyncPlan(response app.SyncResponse) {
 	}
 }
 
-func (r *Renderer) SyncStarted() {
-	fmt.Fprintf(r.w, "%s %s\n", r.symbol("running"), r.strong("Inspecting isolated local Git help"))
+func (r *Renderer) SyncStarted(provider ...string) {
+	display := "Git"
+	if len(provider) > 0 && provider[0] == "gh" {
+		display = "GitHub CLI"
+	}
+	fmt.Fprintf(r.w, "%s %s\n", r.symbol("running"), r.strong("Inspecting isolated local "+display+" help"))
 }
 
 func (r *Renderer) SyncResult(response app.SyncResponse) {
 	r.field("result", string(response.Status))
 	r.field("cache", fmt.Sprintf("%s (%d commands)", response.CacheAfter.Status, response.PublishedCount))
+	if response.Provider == "gh" {
+		r.field("aliases", fmt.Sprint(response.PublishedAliasCount))
+		r.field("flags", fmt.Sprint(response.PublishedFlagCount))
+	}
 	if response.CacheAfter.Digest != "" {
 		r.field("snapshot", response.CacheAfter.Digest)
 	}

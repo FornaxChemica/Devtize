@@ -79,6 +79,34 @@ func TestReviewedBuiltinsWinTiesAndSyncedVersionsAreVisible(t *testing.T) {
 	}
 }
 
+func TestGitHubSearchSupportsProviderAliasesFlagsAndGroups(t *testing.T) {
+	commands := []registry.CommandKnowledge{
+		{ID: "sync.gh.pr", ProviderID: "gh", CommandPath: []string{"gh", "pr"}, Summary: "Manage pull requests", Kind: registry.CommandKindGroup},
+		{ID: "sync.gh.pr.create", ProviderID: "gh", CommandPath: []string{"gh", "pr", "create"}, Summary: "Create a pull request", Kind: registry.CommandKindCommand, Usage: "[flags]", Aliases: []string{"gh pr new"}, Flags: []registry.FlagKnowledge{{LongName: "--web", ShortName: "-w", Summary: "Open a browser"}}},
+	}
+	for index := range commands {
+		commands[index].Risk = "unclassified"
+		commands[index].Effects = []string{"Discovery-only help metadata; effects are not reviewed."}
+		commands[index].VersionRange = "=2.93.0"
+		commands[index].VersionStatus = "exact"
+		commands[index].Support = registry.SupportDiscoverable
+		commands[index].Source = registry.KnowledgeSource{Kind: "sync", Locator: "gh help reference", Digest: "sha256:test", ToolVersion: "2.93.0", ParserVersion: "1", CapturedAt: time.Unix(1, 0).UTC()}
+	}
+	engine := search.New(commands)
+	if got := engine.FindProvider("gh pr create", "gh", 5); len(got) == 0 || got[0].ID != "sync.gh.pr.create" || got[0].Kind != registry.CommandKindCommand {
+		t.Fatalf("exact path results=%#v", got)
+	}
+	if got := engine.FindProvider("gh pr new", "gh", 5); len(got) == 0 || got[0].MatchReason != "exact alias" || got[0].MatchedField != "alias" {
+		t.Fatalf("alias results=%#v", got)
+	}
+	if got := engine.FindProvider("--web", "gh", 5); len(got) == 0 || got[0].MatchedField != "flag:--web" {
+		t.Fatalf("flag results=%#v", got)
+	}
+	if got := engine.FindProvider("gh pr create", "git", 5); len(got) != 0 {
+		t.Fatalf("provider filter leaked results=%#v", got)
+	}
+}
+
 func FuzzSearchIsDeterministic(f *testing.F) {
 	f.Add("initialize git repository")
 	f.Add("show $HOME > output | next")

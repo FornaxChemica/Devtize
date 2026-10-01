@@ -23,6 +23,18 @@
     }
   ],
   "registry": {
-    "status": "not_synced"
+    "status": "not_synced",
+    "providers": [
+      {
+        "provider": "git",
+        "status": "not_synced",
+        "entries": 0
+      },
+      {
+        "provider": "gh",
+        "status": "not_synced",
+        "entries": 0
+      }
+    ]
   }
 }

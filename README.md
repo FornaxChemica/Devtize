@@ -1,13 +1,13 @@
 # Devtize
 
-Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides completed Phase B self-hosting, Phase C daily Git workflows, and the first Phase D version-aware discovery slice: it can inspect local and optional live repository status, read redacted execution history, search reviewed and locally synchronized Git knowledge offline, publish a repository, create commits guarded by reviewed Go checks, push through a separate authorization boundary, and inspect constrained undo eligibility without mutation. The project is pre-release and its public interfaces may still change.
+Devtize is an open-source, local-first developer command layer written in Go. The `dvz` CLI provides completed Phase B self-hosting, Phase C daily Git workflows, and Phase D.2 version-aware Git and GitHub CLI discovery: it can inspect repository status, read redacted history, search reviewed and locally synchronized knowledge offline, publish a repository, create commits guarded by reviewed Go checks, push through a separate authorization boundary, and inspect constrained undo eligibility without mutation. The project is pre-release and its public interfaces may still change.
 
 ## Current Features
 
 - `dvz version` reports deterministic build metadata.
 - `dvz doctor` checks configuration, project evidence, Git, GitHub CLI, and builtin/synchronized registry state without making changes.
-- `dvz find <intent>` searches reviewed builtins plus the last valid local Git snapshot offline and never executes a result.
-- `dvz sync git [--dry-run]` validates bounded official local Git help and, after exact confirmation, publishes discovery-only knowledge to an immutable local cache.
+- `dvz find [--provider git|gh] <intent>` searches reviewed builtins plus independent valid local snapshots offline and never executes a result.
+- `dvz sync git|gh [--dry-run]` validates one bounded official local help source and, after exact confirmation, publishes discovery-only knowledge to an immutable provider cache.
 - `dvz status` reports daily Git state offline; `--remote` adds an explicit live check without fetching.
 - `dvz history` reads bounded, redacted Devtize execution records for the current project.
 - `dvz undo <execution-id> --dry-run` validates whether a recorded local commit has a safe planner-only compensation.
@@ -47,6 +47,8 @@ go build -o dvz ./cmd/dvz
 ./dvz doctor
 ./dvz find initialize git repository
 ./dvz sync git --dry-run
+./dvz sync gh --dry-run
+./dvz find --provider gh create pull request
 ./dvz status
 ./dvz status --remote
 ./dvz history --limit 20
@@ -69,7 +71,7 @@ flowchart TD
     APP --> DETECT[Project and tool detection]
     APP --> SEARCH[Deterministic search]
     SEARCH --> REG[Reviewed command registry]
-    APP --> SYNC[Bounded Git help sync]
+    APP --> SYNC[Bounded Git and GitHub CLI help sync]
     SYNC --> REG
     DETECT --> PROC[Safe process runner]
     PROC --> CLIS[Installed official CLIs]
@@ -128,7 +130,8 @@ With no paths, message, or check overrides, `dvz ship` preserves the push-only w
 | Daily Git status | executable | Offline local state by default; explicit non-fetching live verification with `--remote` |
 | Execution history | executable | Bounded, project-scoped, redacted reads through `dvz history` |
 | Constrained undo | planned | Read-only eligibility and compensation planning; execution is unavailable |
-| GitHub CLI (`gh`) | workflow-ready | Auth preflight, repository creation, and guarded description updates |
+| GitHub CLI discovery | discoverable | Optional version-matched `gh help reference` snapshot; nested paths, aliases, usage, and flags |
+| GitHub CLI (`gh`) reviewed capabilities | workflow-ready | Narrow auth preflight, repository creation, and guarded description updates; synchronized knowledge grants no authority |
 | Go projects | detected | `go.mod` evidence |
 | JavaScript projects | detected | Metadata and recognized lockfile evidence |
 | Other runtimes and tools | planned | Not implemented |
@@ -139,7 +142,7 @@ Support levels progress through `planned`, `detected`, `discoverable`, `executab
 
 All Phase A behavior works without AI, network access, hosted services, telemetry, or remote credentials. AI remains disabled in the schema. Ollama and user-provided compatible endpoints are roadmap items and will require explicit configuration and documented context controls before they can receive data.
 
-The reviewed built-in catalog is always available offline. `dvz sync git` invokes one fixed local command, `git help --all --no-external-commands --no-aliases --verbose`, in an isolated environment. It performs no documentation download and publishes only after an immutable local-write plan receives the exact response `sync`. `dvz find` reads the last valid cache without invoking Git. Synced help remains untrusted discovery data and can never create an executable capability. See [Registry](docs/registry.md).
+The reviewed built-in catalog is always available offline. Git sync invokes only `git help --all --no-external-commands --no-aliases --verbose`; GitHub CLI sync invokes only `gh help reference`. Both use isolated, bounded environments, perform no documentation download, and publish only after an immutable local-write plan receives the exact response `sync`. `dvz find` reads caches without invoking either tool. User aliases, extensions, auth state, tokens, custom hosts, editors, browsers, and network docs are excluded. Synced help remains untrusted discovery data and can never create an executable capability. See [Registry](docs/registry.md).
 
 ## Configuration
 
@@ -174,7 +177,7 @@ Project configuration is read from the nearest `.dvz.yaml`. `checks.ship` accept
 
 Human output adapts to terminal width, UTF-8 support, and color policy while retaining textual status labels. Redirected and `--no-color` output is stable ASCII, and `--json` never contains ANSI styling. Existing push-only ship JSON remains schema version 1 and unchanged; composed ship returns its own schema-version-1 response with `mode: compose`, correlated local/push plans, check results, and recovery hints.
 
-Versioned registry snapshots are derived state stored under `<platform-user-cache>/devtize/registry/v1/git/`; this is separate from YAML configuration and append-only history. Removing that directory is a safe loss of synchronized discovery data: reviewed builtins continue to work, and a later confirmed `dvz sync git` can rebuild it. Devtize does not delete malformed cache data automatically.
+Versioned registry snapshots are derived state stored independently under `<platform-user-cache>/devtize/registry/v1/{git,gh}/`; this is separate from YAML configuration and append-only history. Removing one provider directory safely loses only that synchronized discovery data; a later confirmed provider sync can rebuild it. Corruption in one provider does not discard the other, and Devtize does not delete malformed cache data automatically.
 
 ## Development
 
@@ -193,13 +196,13 @@ No separate linter is configured. CI runs formatting verification, tests, vet, a
 - `CONFIG_INVALID`: correct the reported version, unsupported field, or value in user/project configuration.
 - `TOOL_NOT_FOUND`: install the named tool if the feature requires it. Missing optional tools are reported by `doctor` without a crash.
 - `TOOL_VERSION_UNSUPPORTED`: upgrade the tool to the minimum version shown by `doctor`.
-- `CAPABILITY_NOT_FOUND`: make the Git search intent more specific.
+- `CAPABILITY_NOT_FOUND`: make the search intent more specific or synchronize the selected provider.
 - `PLAN_INVALID`: pass a valid repository name, owner, branch, remote, selected path, and `--message`.
 - `AUTH_REQUIRED`: authenticate `gh` before remote writes.
 - `CONFIRMATION_DECLINED`: rerun and confirm the same plan digest if you want to proceed.
 - `PRECONDITION_FAILED`: resolve detached HEAD, unexpected origin, incompatible remote repository, or empty selection.
 - `PROCESS_TIMEOUT` or `PROCESS_FAILED`: run `dvz doctor` again and inspect the safe diagnostic; no automatic recovery mutation is attempted.
-- `SYNC_FAILED`: the previous valid discovery cache was retained. Resolve the reported local Git or cache issue and retry `dvz sync git`; deleting the derived registry cache is safe but never automatic.
+- `SYNC_FAILED`: the selected provider's previous valid discovery cache was retained. Resolve the reported local tool or cache issue and retry `dvz sync git` or `dvz sync gh`; deleting derived cache data is safe but never automatic.
 - `CHECK_FAILED`: fix the reported reviewed project check; no staging, commit, or push was attempted.
 - `HISTORY_READ_FAILED`: check that the local history file is readable.
 - `HISTORY_INVALID`: inspect or archive malformed, unsupported, or oversized local history; Devtize does not rewrite it automatically.
@@ -219,7 +222,7 @@ Phase B is complete. It adds reviewed Git and GitHub adapters and an immutable p
 
 Do not run manual `git init`, `git add`, `git commit`, `gh repo create`, `git remote add`, or `git push` in this folder. After the maintainer-run milestone completes, sanitized evidence should be recorded in `docs/self-hosting.md`.
 
-Phase C includes constrained, read-only undo planning. Phase D.1 adds Git-only, depth-one, local-help synchronization. Nested help, flags, `gh`, language/package-manager providers, and opt-in official network documentation remain later registry work. Executable local compensation and pushed-commit revert remain separate future authorization boundaries. Pull-request creation, optional AI, a TUI, and MCP are also future work.
+Phase C includes constrained, read-only undo planning. Phase D.2 adds independent Git and GitHub CLI local-help snapshots, provider-filtered search, and non-authoritative GitHub CLI aliases, usage, and flags. Runtime/package-manager providers, `explain`, cheatsheets, automatic sync, and opt-in official network documentation remain later work. Executable local compensation, pushed-commit revert, pull-request creation, optional AI, a TUI, and MCP remain separate future authorization boundaries.
 
 ## Contributing, Security, And License
 

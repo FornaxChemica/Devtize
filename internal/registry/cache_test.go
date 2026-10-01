@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,35 @@ func TestCachePublishLoadAndCorruptFallback(t *testing.T) {
 	}
 	if loaded.Status != registry.CacheExact || loaded.Snapshot == nil || loaded.Snapshot.Digest != snapshot.Digest || len(loaded.Warnings) == 0 {
 		t.Fatalf("load = %#v", loaded)
+	}
+}
+
+func TestPhaseD1GitSnapshotFixtureKeepsCanonicalDigestAndBytes(t *testing.T) {
+	fixture := filepath.Join("..", "..", "testdata", "registry", "phase-d1-git-snapshot.json")
+	content, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const digest = "sha256:47bbb14849acf804bc30b54ec876e9effc5da89e1fdba5d543717a4f17c95f76"
+	root := t.TempDir()
+	directory := filepath.Join(root, "git")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "snapshot-"+strings.TrimPrefix(digest, "sha256:")+".json")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := (registry.CacheStore{Root: root}).Load("git")
+	if err != nil || loaded.Snapshot == nil || loaded.Snapshot.Digest != digest {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	canonical, err := json.Marshal(*loaded.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(canonical) != strings.TrimSpace(string(content)) {
+		t.Fatalf("legacy canonical bytes changed\n got %s\nwant %s", canonical, content)
 	}
 }
 
@@ -102,6 +132,40 @@ func TestCacheRejectsDiscoveryMetadataThatClaimsAuthority(t *testing.T) {
 	}
 	if err := snapshot.Validate(); err == nil {
 		t.Fatal("cache accepted unreviewed authority metadata")
+	}
+}
+
+func TestGitHubCacheValidatesIndependentlyAndRejectsProviderSwaps(t *testing.T) {
+	store := registry.CacheStore{Root: t.TempDir()}
+	when := time.Date(2026, 5, 27, 1, 2, 3, 0, time.UTC)
+	gh := ghTestSnapshot(t, when, "2.93.0")
+	if _, err := store.Publish(gh); err != nil {
+		t.Fatal(err)
+	}
+	git := testSnapshot(t, when, "2.50.1", "status")
+	if _, err := store.Publish(git); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(store.Root, "gh")
+	if err := os.WriteFile(filepath.Join(directory, "snapshot-corrupt.json"), []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loadedGit, err := store.Load("git")
+	if err != nil || loadedGit.Snapshot == nil || loadedGit.Snapshot.Digest != git.Digest {
+		t.Fatalf("git=%#v err=%v", loadedGit, err)
+	}
+	loadedGH, err := store.Load("gh")
+	if err != nil || loadedGH.Snapshot == nil || loadedGH.Snapshot.Digest != gh.Digest || len(loadedGH.Warnings) == 0 {
+		t.Fatalf("gh=%#v err=%v", loadedGH, err)
+	}
+	swapped := gh
+	swapped.ProviderID = "git"
+	swapped, err = swapped.WithDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := swapped.Validate(); err == nil {
+		t.Fatal("provider/source swap was accepted")
 	}
 }
 
@@ -281,6 +345,36 @@ func testSnapshot(t *testing.T, when time.Time, version string, names ...string)
 	content, _ := json.Marshal(snapshot)
 	if err := json.Unmarshal(content, &clone); err != nil || !reflect.DeepEqual(snapshot, clone) {
 		t.Fatalf("snapshot did not round trip: %v", err)
+	}
+	return snapshot
+}
+
+func ghTestSnapshot(t *testing.T, when time.Time, version string) registry.ProviderSnapshot {
+	t.Helper()
+	sourceDigest := "sha256:gh-source"
+	paths := [][]string{{"gh", "api"}, {"gh", "auth"}, {"gh", "auth", "login"}, {"gh", "issue"}, {"gh", "issue", "create"}, {"gh", "pr"}, {"gh", "pr", "create"}, {"gh", "repo"}, {"gh", "repo", "create"}}
+	commands := make([]registry.CommandKnowledge, 0, len(paths))
+	for _, path := range paths {
+		kind := registry.CommandKindCommand
+		if len(path) == 2 && path[1] != "api" {
+			kind = registry.CommandKindGroup
+		}
+		command := registry.CommandKnowledge{ID: "sync.gh." + strings.Join(path[1:], "."), ProviderID: "gh", CommandPath: path, Summary: "Synced " + strings.Join(path[1:], " "), Kind: kind, VersionRange: "=" + version, Risk: "unclassified", Effects: []string{"Discovery-only help metadata; effects are not reviewed."}, Source: registry.KnowledgeSource{Kind: "sync", Locator: "gh help reference", Digest: sourceDigest, ToolVersion: version, ParserVersion: "1", CapturedAt: when}, Support: registry.SupportDiscoverable, VersionStatus: "exact"}
+		if command.Command() == "gh pr create" {
+			command.Aliases = []string{"gh pr new"}
+			command.Flags = []registry.FlagKnowledge{{LongName: "--web", ShortName: "-w", Summary: "Open the browser"}}
+		}
+		commands = append(commands, command)
+	}
+	sort.Slice(commands, func(i, j int) bool { return commands[i].ID < commands[j].ID })
+	snapshot := registry.ProviderSnapshot{SchemaVersion: 1, ProviderID: "gh", Installation: registry.InstallationSnapshot{Executable: "gh", Path: "/usr/bin/gh", Version: version, DetectedAt: when}, Attempt: registry.SyncAttempt{Status: "succeeded", AttemptedAt: when}, KnowledgeVersion: version, ParserID: "gh-help-reference", ParserVersion: "1", SourceArgv: []string{"gh", "help", "reference"}, SourceDigest: sourceDigest, CapturedAt: when, Limits: registry.SyncLimits{MaxDepth: 2, MaxCommands: 512, MaxOutputBytes: 2 << 20, TimeoutMillis: 15_000, MaxFlags: 4096, MaxAliases: 1024}, Commands: commands}
+	var err error
+	snapshot, err = snapshot.WithDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("invalid gh snapshot: %v", err)
 	}
 	return snapshot
 }

@@ -24,6 +24,53 @@ Ancillary Commands / Manipulators
    config                  Get and set repository or global options
 `
 
+const ghSyncReference = `# gh reference
+
+## gh api <endpoint> [flags]
+
+Make an authenticated GitHub API request
+
+  -X, --method string   The HTTP method
+
+## gh auth <command>
+
+Authenticate gh and git with GitHub
+
+### gh auth login [flags]
+
+Log in to a GitHub account
+
+## gh issue <command>
+
+Work with GitHub issues
+
+### gh issue create [flags]
+
+Create a new issue
+
+## gh pr <command>
+
+Manage pull requests
+
+### gh pr create [flags]
+
+Create a pull request
+
+Aliases
+
+gh pr new
+
+  -w, --web   Open the browser
+
+## gh repo <command>
+
+Manage repositories
+
+### gh repo create [<name>] [flags]
+
+Create a new repository
+`
+
 type syncRunner struct {
 	t          *testing.T
 	versions   []string
@@ -36,6 +83,36 @@ type syncRunner struct {
 type versionOnlyRunner struct {
 	result devprocess.CommandResult
 	err    error
+}
+
+type ghSyncRunner struct {
+	t         *testing.T
+	specs     []devprocess.CommandSpec
+	versions  []string
+	reference string
+	err       error
+	truncated bool
+}
+
+func (r *ghSyncRunner) Run(_ context.Context, spec devprocess.CommandSpec) (devprocess.CommandResult, error) {
+	r.specs = append(r.specs, spec)
+	if reflect.DeepEqual(spec.Args, []string{"--version"}) {
+		version := "2.93.0"
+		if len(r.versions) > 0 {
+			version = r.versions[0]
+			r.versions = r.versions[1:]
+		}
+		return devprocess.CommandResult{Executable: "/tools/gh", Stdout: "gh version " + version}, nil
+	}
+	if reflect.DeepEqual(spec.Args, []string{"help", "reference"}) {
+		output := r.reference
+		if output == "" {
+			output = ghSyncReference
+		}
+		return devprocess.CommandResult{Executable: "/tools/gh", Stdout: output, StdoutTruncated: r.truncated}, r.err
+	}
+	r.t.Fatalf("unexpected subprocess: %s %#v", spec.Executable, spec.Args)
+	return devprocess.CommandResult{}, nil
 }
 
 type controlledSyncCache struct {
@@ -319,6 +396,73 @@ func TestSyncDeclineAndStalePlanDoNotPublish(t *testing.T) {
 			t.Fatalf("stale plan mutated cache: %v", err)
 		}
 	})
+}
+
+func TestGitHubSyncDryRunAndConfirmedLifecycle(t *testing.T) {
+	for _, dryRun := range []bool{true, false} {
+		t.Run(map[bool]string{true: "dry-run", false: "apply"}[dryRun], func(t *testing.T) {
+			base := t.TempDir()
+			cacheRoot := filepath.Join(base, "cache")
+			historyPath := filepath.Join(base, "history.jsonl")
+			runner := &ghSyncRunner{t: t}
+			now := time.Date(2026, 5, 27, 1, 2, 3, 0, time.UTC)
+			service := app.SyncService{WorkingDir: base, Cache: registry.CacheStore{Root: cacheRoot}, CacheRoot: cacheRoot, Runner: runner, History: history.Store{Path: historyPath}, HistoryEnabled: true, Now: func() time.Time { return now }, TempDir: func() (string, error) { return os.MkdirTemp(base, "isolated-") }}
+			options := app.SyncOptions{Provider: "gh", DryRun: dryRun}
+			response, err := service.Plan(context.Background(), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.ParsedCount != 9 || response.ParsedAliasCount != 1 || response.ParsedFlagCount != 2 || response.Limits.MaxFlags != 4096 || len(runner.specs) != 2 {
+				t.Fatalf("response=%#v specs=%d", response, len(runner.specs))
+			}
+			versionSpec, referenceSpec := runner.specs[0], runner.specs[1]
+			if versionSpec.Dir != referenceSpec.Dir || versionSpec.EnvOverlay["GH_CONFIG_DIR"] == "" || referenceSpec.EnvOverlay["GH_PROMPT_DISABLED"] != "1" || referenceSpec.EnvOverlay["GH_TOKEN"] != "" || !reflect.DeepEqual(referenceSpec.EnvAllowlist, []string{"PATH", "SYSTEMROOT", "WINDIR"}) {
+				t.Fatalf("isolation mismatch: %#v %#v", versionSpec, referenceSpec)
+			}
+			response, err = service.ExecutePlanned(context.Background(), options, strings.NewReader("sync\n"), response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dryRun {
+				if _, err := os.Stat(cacheRoot); !os.IsNotExist(err) {
+					t.Fatalf("dry-run wrote cache: %v", err)
+				}
+				return
+			}
+			if response.Status != "succeeded" || response.PublishedCount != 9 || response.PublishedAliasCount != 1 || response.PublishedFlagCount != 2 || len(runner.specs) != 3 {
+				t.Fatalf("response=%#v specs=%d", response, len(runner.specs))
+			}
+			loaded, err := service.Cache.Load("gh")
+			if err != nil || loaded.Snapshot == nil || loaded.Status != registry.CacheExact {
+				t.Fatalf("loaded=%#v err=%v", loaded, err)
+			}
+			content := string(mustRead(t, historyPath))
+			if strings.Contains(content, "Create a pull request") || !strings.Contains(content, "\"provider\":\"gh\"") {
+				t.Fatalf("unsafe history: %s", content)
+			}
+		})
+	}
+}
+
+func TestGitHubSyncDeclineAndMalformedReferenceRetainCaches(t *testing.T) {
+	base := t.TempDir()
+	cacheRoot := filepath.Join(base, "cache")
+	runner := &ghSyncRunner{t: t}
+	service := app.SyncService{WorkingDir: base, Cache: registry.CacheStore{Root: cacheRoot}, CacheRoot: cacheRoot, Runner: runner, TempDir: func() (string, error) { return os.MkdirTemp(base, "isolated-") }}
+	response, err := service.Plan(context.Background(), app.SyncOptions{Provider: "gh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.ExecutePlanned(context.Background(), app.SyncOptions{Provider: "gh"}, strings.NewReader("no\n"), response); !hasCode(err, app.CodeConfirmationDeclined) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := os.Stat(cacheRoot); !os.IsNotExist(err) {
+		t.Fatalf("decline wrote cache: %v", err)
+	}
+	runner.reference = "# gh reference\n## gh api\nOnly one command\n"
+	if _, err = service.Plan(context.Background(), app.SyncOptions{Provider: "gh"}); !hasCode(err, app.CodeSyncFailed) {
+		t.Fatalf("err=%v", err)
+	}
 }
 
 func newSyncService(t *testing.T) (app.SyncService, *syncRunner, string, string) {

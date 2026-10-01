@@ -1,6 +1,6 @@
 # Safety And Threat Model
 
-Phase D.1 keeps the existing read-only and repository behavior and adds bounded Git knowledge synchronization. `find` searches in-memory builtin and cached knowledge and has no process runner dependency. `doctor` reads bounded configuration, cache metadata, and project evidence, then runs only fixed version probes. `status` is offline unless live verification is explicitly requested, and `history` reads bounded local records. Repository, commit, and sync dry-runs perform no intended persistent mutation.
+Phase D.2 keeps the existing read-only and repository behavior and adds bounded GitHub CLI knowledge synchronization beside Git. `find` searches in-memory builtin and independently loaded cached knowledge and has no process runner dependency. `doctor` reads bounded per-provider cache metadata and project evidence, then runs only fixed version probes. `status` is offline unless live verification is explicitly requested, and `history` reads bounded local records. Repository, commit, and sync dry-runs perform no intended persistent mutation.
 
 ## Process Boundary
 
@@ -8,13 +8,22 @@ All subprocesses use an executable and argument slice, an explicit working direc
 
 Git synchronization invokes exactly `git help --all --no-external-commands --no-aliases --verbose` from a temporary directory with isolated `HOME`/`XDG_CONFIG_HOME`, system config disabled, pager variables set to `cat`, `LC_ALL=C`, disabled stdin, a ten-second timeout, and a one-MiB capture limit. It never invokes a name learned from help, repository code, hooks, aliases, external `git-*` commands, a shell, or a network documentation source.
 
+GitHub CLI synchronization invokes exactly `gh help reference` from an empty
+temporary home/config/state directory with disabled prompts, update notices,
+pagers, color, and stdin; `LC_ALL=C`; a 15-second timeout; and a two-MiB
+capture limit. Only `PATH`, `SYSTEMROOT`, and `WINDIR` may be inherited. Tokens,
+custom hosts, auth headers, aliases, extensions, editors, browsers, and user
+configuration are not inherited or inspected. Non-empty stderr, truncation,
+malformed headings, duplicates, missing anchors, and any parser limit fail the
+candidate without replacing a valid snapshot.
+
 ## Sensitive Data
 
 Configuration accepts no credential fields. Diagnostics and history redact common token, password, secret, authorization, and bearer forms. `repo create` checks `gh auth status` before remote writes but does not read or store tokens. Selected files receive a bounded secret preflight based on filenames and common content patterns; warnings require an explicit confirmation that `--yes` cannot bypass.
 
 History is redacted both before append and after read because the local file is untrusted. Public history output uses typed fields and does not expose arbitrary persisted invocation or project maps. Reads reject unsupported schemas, records over one MiB, and files over 32 MiB instead of silently dropping data. `status` and `history` do not append audit entries for themselves.
 
-Registry cache files are also untrusted. Loading is bounded to eight snapshot files and eight MiB total, rejects unknown schema fields and invalid content-addresses, and validates provider, parser, source argv, ordering, provenance, limits, and discovery-only metadata. A corrupt cache cannot displace reviewed builtins. Cache publication uses a restrictive same-directory temporary file, reread validation, and an immutable digest filename; only afterward are old valid snapshots reduced to three.
+Registry cache files are also untrusted. Each provider loads independently, bounded to eight snapshot files and eight MiB total, rejects unknown schema fields and invalid content-addresses, and validates provider-specific parser, source argv, ordering, provenance, limits, and discovery-only metadata. A corrupt provider cannot displace reviewed builtins or another valid provider. Cache publication uses a restrictive same-directory temporary file, reread validation, and an immutable digest filename; only afterward are old valid snapshots reduced to three.
 
 `dvz undo <execution-id> --dry-run` also treats history as untrusted. A source record can only locate typed `git.commit.created` evidence; it cannot supply a capability, executable, argument list, or authorization. Devtize independently verifies live branch, `HEAD`, parent, worktree, and configured upstream state. Legacy or ambiguous evidence produces an unavailable analysis. This milestone has no reset, restore, revert, push, confirmation, or history-write path.
 

@@ -36,6 +36,20 @@ func TestFindJoinsOrdinaryTrailingWords(t *testing.T) {
 	}
 }
 
+func TestFindProviderValidationAndScopedMiss(t *testing.T) {
+	catalog, err := builtin.Catalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := app.FindService{Search: search.New(catalog.Commands())}
+	if _, err := service.FindWithProvider([]string{"status"}, "docker"); !hasCode(err, app.CodeInvalidUsage) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := service.FindWithProvider([]string{"create", "pull", "request"}, "gh"); !hasCode(err, app.CodeCapabilityNotFound) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestDoctorReportsOptionalFailuresWithoutCrashing(t *testing.T) {
 	service := app.DoctorService{
 		WorkingDir: "/work", RegistryCount: 12,

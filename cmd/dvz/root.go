@@ -88,10 +88,12 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	if err != nil {
 		return nil, nil, fmt.Errorf("load builtin registry: %w", err)
 	}
-	cache, cacheLoad := loadRegistryCache(deps)
+	cache, cacheLoads := loadRegistryCaches(deps)
 	commands := builtinCatalog.Commands()
-	if cacheLoad.Snapshot != nil {
-		commands = registry.MergeCommands(commands, cacheLoad.Snapshot.Commands)
+	for _, provider := range []string{"git", "gh"} {
+		if cacheLoads[provider].Snapshot != nil {
+			commands = registry.MergeCommands(commands, cacheLoads[provider].Snapshot.Commands)
+		}
 	}
 	catalog, err := registry.NewCatalog(commands)
 	if err != nil {
@@ -111,9 +113,9 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	root.PersistentFlags().BoolVar(&options.jsonOutput, "json", false, "emit versioned JSON output")
 	root.PersistentFlags().BoolVar(&options.noColor, "no-color", false, "disable colored output")
 
-	findService := app.FindService{Search: search.New(catalog.Commands()), Registry: app.FindRegistry{Status: string(cacheLoad.Status), Warnings: cacheLoad.Warnings}}
+	findService := app.FindService{Search: search.New(catalog.Commands()), Registry: findRegistryState(cacheLoads)}
 	root.AddCommand(findCommand(deps, options, findService, stdout))
-	root.AddCommand(doctorCommand(deps, options, catalog.Len(), cacheLoad, stdout))
+	root.AddCommand(doctorCommand(deps, options, catalog.Len(), cacheLoads, stdout))
 	root.AddCommand(syncCommand(deps, options, cache, stdout, stderr))
 	root.AddCommand(commitCommand(deps, options, stdout))
 	root.AddCommand(statusCommand(deps, options, stdout))
@@ -555,33 +557,77 @@ func localHistoryPath(deps dependencies) string {
 	return filepath.Join(filepath.Dir(configPath), "history.jsonl")
 }
 
-func loadRegistryCache(deps dependencies) (registry.CacheStore, registry.CacheLoadResult) {
+func loadRegistryCaches(deps dependencies) (registry.CacheStore, map[string]registry.CacheLoadResult) {
+	loads := make(map[string]registry.CacheLoadResult, 2)
 	cacheDir := deps.userCacheDir
 	if cacheDir == nil {
 		cacheDir = os.UserCacheDir
 	}
 	root, err := cacheDir()
 	if err != nil || root == "" {
-		return registry.CacheStore{}, registry.CacheLoadResult{
-			Status: registry.CacheNotSynced, Warnings: []string{"platform user cache directory could not be resolved; reviewed builtins remain available"},
+		for _, provider := range []string{"git", "gh"} {
+			loads[provider] = registry.CacheLoadResult{Status: registry.CacheNotSynced, Warnings: []string{"platform user cache directory could not be resolved; reviewed builtins remain available"}}
 		}
+		return registry.CacheStore{}, loads
 	}
 	store := registry.CacheStore{Root: filepath.Join(root, "devtize", "registry", "v1")}
-	loaded, err := store.Load("git")
-	if err != nil {
-		return store, registry.CacheLoadResult{Status: registry.CacheInvalid, Warnings: []string{"registry cache could not be read; reviewed builtins remain available"}}
+	for _, provider := range []string{"git", "gh"} {
+		loaded, err := store.Load(provider)
+		if err != nil {
+			loaded = registry.CacheLoadResult{Status: registry.CacheInvalid, Warnings: []string{"registry cache could not be read; reviewed builtins remain available"}}
+		}
+		loads[provider] = loaded
 	}
-	return store, loaded
+	return store, loads
+}
+
+func findRegistryState(loads map[string]registry.CacheLoadResult) app.FindRegistry {
+	state := app.FindRegistry{Status: string(registry.CacheNotSynced)}
+	for _, provider := range []string{"git", "gh"} {
+		loaded := loads[provider]
+		detail := app.FindRegistryProvider{Provider: provider, Status: string(loaded.Status), Warnings: append([]string(nil), loaded.Warnings...)}
+		if loaded.Snapshot != nil {
+			detail.KnowledgeVersion = loaded.Snapshot.KnowledgeVersion
+			detail.Entries = len(loaded.Snapshot.Commands)
+		}
+		state.Providers = append(state.Providers, detail)
+		for _, warning := range loaded.Warnings {
+			state.Warnings = append(state.Warnings, provider+": "+warning)
+		}
+		if cacheStatusPriority(loaded.Status) > cacheStatusPriority(registry.CacheStatus(state.Status)) {
+			state.Status = string(loaded.Status)
+		}
+	}
+	return state
+}
+
+func cacheStatusPriority(status registry.CacheStatus) int {
+	switch status {
+	case registry.CacheInvalid:
+		return 3
+	case registry.CacheStale:
+		return 2
+	case registry.CacheExact:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func syncCommand(deps dependencies, options *rootOptions, cache registry.CacheStore, stdout, stderr io.Writer) *cobra.Command {
 	var syncOptions app.SyncOptions
 	command := &cobra.Command{
-		Use: "sync <provider>", Short: "Synchronize version-aware discovery knowledge from local official CLI help", Args: cobra.ExactArgs(1),
+		Use: "sync <provider>", Short: "Synchronize version-aware discovery knowledge from local official CLI help",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return &app.Error{Code: app.CodeInvalidUsage, Message: "sync requires exactly one provider", Hint: "Use dvz sync git or dvz sync gh."}
+			}
+			return nil
+		},
 		RunE: func(command *cobra.Command, args []string) error {
 			syncOptions.Provider = args[0]
-			if syncOptions.Provider != "git" {
-				return &app.Error{Code: app.CodeInvalidUsage, Message: "sync currently supports only the git provider", Hint: "Use dvz sync git."}
+			if syncOptions.Provider != "git" && syncOptions.Provider != "gh" {
+				return &app.Error{Code: app.CodeInvalidUsage, Message: "sync requires a supported provider", Hint: "Use dvz sync git or dvz sync gh."}
 			}
 			if cache.Root == "" {
 				return &app.Error{Code: app.CodeSyncFailed, Message: "platform user cache directory could not be resolved", Hint: "Set a valid platform cache directory and retry."}
@@ -596,7 +642,7 @@ func syncCommand(deps dependencies, options *rootOptions, cache registry.CacheSt
 				promptOutput = stderr
 			} else {
 				renderer = ui.New(stdout, humanUIOptions(deps, loaded.Config))
-				renderer.SyncStarted()
+				renderer.SyncStarted(syncOptions.Provider)
 			}
 			service := app.SyncService{
 				WorkingDir: deps.workingDir, Cache: cache, CacheRoot: cache.Root, Runner: deps.runner,
@@ -623,14 +669,15 @@ func syncCommand(deps dependencies, options *rootOptions, cache registry.CacheSt
 }
 
 func findCommand(deps dependencies, options *rootOptions, service app.FindService, stdout io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var provider string
+	command := &cobra.Command{
 		Use: "find <intent>", Short: "Find reviewed command knowledge without executing it", Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, words []string) error {
 			loaded, err := loadConfig(deps, options)
 			if err != nil {
 				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
 			}
-			response, err := service.Find(words)
+			response, err := service.FindWithProvider(words, provider)
 			if err != nil {
 				return err
 			}
@@ -641,9 +688,11 @@ func findCommand(deps dependencies, options *rootOptions, service app.FindServic
 			return nil
 		},
 	}
+	command.Flags().StringVar(&provider, "provider", "", "limit discovery to git or gh")
+	return command
 }
 
-func doctorCommand(deps dependencies, options *rootOptions, registryCount int, cacheLoad registry.CacheLoadResult, stdout io.Writer) *cobra.Command {
+func doctorCommand(deps dependencies, options *rootOptions, registryCount int, cacheLoads map[string]registry.CacheLoadResult, stdout io.Writer) *cobra.Command {
 	return &cobra.Command{
 		Use: "doctor", Short: "Inspect local Devtize readiness without making changes", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
@@ -664,7 +713,7 @@ func doctorCommand(deps dependencies, options *rootOptions, registryCount int, c
 			}
 			service := app.DoctorService{
 				WorkingDir: deps.workingDir, Project: detect.DetectProject,
-				Tools: detect.ToolDetector{Runner: deps.runner}, RegistryCount: registryCount, RegistryCache: cacheLoad, ToolStateDir: toolStateDir,
+				Tools: detect.ToolDetector{Runner: deps.runner}, RegistryCount: registryCount, RegistryCaches: cacheLoads, ToolStateDir: toolStateDir,
 			}
 			response, err := service.Run(command.Context(), check)
 			if err != nil {

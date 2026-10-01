@@ -28,6 +28,8 @@ func TestBuiltBinaryGitKnowledgeSyncAndOfflineFind(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "git-calls.log")
 	controlPath := filepath.Join(t.TempDir(), "fail-help")
 	buildFakeGit(t, fakeDir, logPath, controlPath)
+	ghLogPath := filepath.Join(t.TempDir(), "gh-calls.log")
+	buildFakeGH(t, fakeDir, ghLogPath)
 	home := t.TempDir()
 	configHome := filepath.Join(home, "config")
 	cacheHome := filepath.Join(home, "cache")
@@ -85,6 +87,28 @@ func TestBuiltBinaryGitKnowledgeSyncAndOfflineFind(t *testing.T) {
 	if string(calls) != wantCalls {
 		t.Fatalf("Git calls = %q, want %q", calls, wantCalls)
 	}
+	ghSync := exec.Command(binary, "--json", "sync", "gh")
+	ghSync.Dir = project
+	ghSync.Env = environment
+	ghSync.Stdin = strings.NewReader("sync\n")
+	output, err = ghSync.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"published_alias_count": 1`) || !strings.Contains(string(output), `"published_flag_count": 1`) {
+		t.Fatalf("gh sync: %v\n%s", err, output)
+	}
+	ghFind := exec.Command(binary, "--json", "find", "--provider", "gh", "gh", "pr", "new")
+	ghFind.Dir = project
+	ghFind.Env = environment
+	output, err = ghFind.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"command": "gh pr create"`) || !strings.Contains(string(output), `"matched_field": "alias"`) {
+		t.Fatalf("gh find: %v\n%s", err, output)
+	}
+	ghCalls, err := os.ReadFile(ghLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ghCalls) != "--version\nhelp reference\n--version\n" {
+		t.Fatalf("gh calls=%q", ghCalls)
+	}
 	after, err := os.ReadDir(project)
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +120,73 @@ func TestBuiltBinaryGitKnowledgeSyncAndOfflineFind(t *testing.T) {
 	historyContent, err := os.ReadFile(historyPath)
 	if err != nil || !strings.Contains(string(historyContent), `"workflow":"registry.sync"`) || strings.Contains(string(historyContent), "Show the working tree") {
 		t.Fatalf("global sync history: %v\n%s", err, historyContent)
+	}
+}
+
+func buildFakeGH(t *testing.T, directory, logPath string) {
+	t.Helper()
+	source := fmt.Sprintf(`package main
+import("fmt";"os";"strings")
+func main(){args:=strings.Join(os.Args[1:]," ");f,err:=os.OpenFile(%q,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if err!=nil{panic(err)};fmt.Fprintln(f,args);f.Close();switch args{case "--version":fmt.Println("gh version 2.93.0");case "help reference":fmt.Print(%q);default:os.Exit(2)}}
+`, logPath, `# gh reference
+
+## gh api
+
+Make an authenticated GitHub API request
+
+## gh auth <command>
+
+Authenticate GitHub CLI
+
+### gh auth login
+
+Log in to GitHub
+
+## gh issue <command>
+
+Work with issues
+
+### gh issue create
+
+Create an issue
+
+## gh pr <command>
+
+Work with pull requests
+
+### gh pr create [flags]
+
+Create a pull request
+
+Aliases
+
+gh pr new
+
+  -w, --web   Open a browser
+
+## gh repo <command>
+
+Work with repositories
+
+### gh repo create
+
+Create a repository
+`)
+	sourcePath := filepath.Join(directory, "fake_gh.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(directory, "gh")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, sourcePath)
+	command.Env = os.Environ()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build fake gh: %v\n%s", err, output)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
 	}
 }
 
