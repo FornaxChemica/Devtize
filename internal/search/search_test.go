@@ -2,7 +2,10 @@ package search_test
 
 import (
 	"testing"
+	"time"
 
+	"github.com/FornaxChemica/devtize/internal/registry"
+	"github.com/FornaxChemica/devtize/internal/safety"
 	"github.com/FornaxChemica/devtize/internal/search"
 	"github.com/FornaxChemica/devtize/registry/builtin"
 )
@@ -59,6 +62,20 @@ func TestFuzzyMatchIsLowConfidence(t *testing.T) {
 func TestEmptyQueryReturnsNoResults(t *testing.T) {
 	if results := engine(t).Find("  ", 5); len(results) != 0 {
 		t.Fatalf("empty query returned %#v", results)
+	}
+}
+
+func TestReviewedBuiltinsWinTiesAndSyncedVersionsAreVisible(t *testing.T) {
+	builtins := builtin.Git()
+	synced := registry.CommandKnowledge{
+		ID: "sync.git.status", ProviderID: "git", CommandPath: []string{"git", "status"}, Summary: "Synced status",
+		VersionRange: "=2.50.1", VersionStatus: "stale", Risk: safety.Risk("unclassified"), Effects: []string{"Discovery-only help metadata; effects are not reviewed."},
+		Source:  registry.KnowledgeSource{Kind: "sync", Locator: "git help --all --no-external-commands --no-aliases --verbose", Digest: "sha256:test", ToolVersion: "2.50.1", ParserVersion: "1", CapturedAt: time.Unix(1, 0).UTC()},
+		Support: registry.SupportDiscoverable,
+	}
+	results := search.New(append(builtins, synced)).Find("git status", 20)
+	if len(results) < 2 || results[0].ID != "git.status" || results[0].VersionStatus != "not_checked" || results[1].ID != "sync.git.status" || results[1].VersionStatus != "stale" {
+		t.Fatalf("unexpected source ordering: %#v", results)
 	}
 }
 

@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,142 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestBuiltBinaryGitKnowledgeSyncAndOfflineFind(t *testing.T) {
+	root := filepath.Clean("..")
+	binary := filepath.Join(t.TempDir(), "dvz")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dvz")
+	build.Dir = root
+	build.Env = os.Environ()
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dvz: %v\n%s", err, output)
+	}
+
+	fakeDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "git-calls.log")
+	controlPath := filepath.Join(t.TempDir(), "fail-help")
+	buildFakeGit(t, fakeDir, logPath, controlPath)
+	home := t.TempDir()
+	configHome := filepath.Join(home, "config")
+	cacheHome := filepath.Join(home, "cache")
+	project := t.TempDir()
+	before, err := os.ReadDir(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := append(os.Environ(),
+		"PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+configHome,
+		"XDG_CACHE_HOME="+cacheHome,
+		"NO_COLOR=1",
+	)
+	syncCommand := exec.Command(binary, "--json", "sync", "git")
+	syncCommand.Dir = project
+	syncCommand.Env = environment
+	syncCommand.Stdin = strings.NewReader("sync\n")
+	output, err := syncCommand.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"status": "succeeded"`) || strings.Contains(string(output), "\x1b[") {
+		t.Fatalf("sync: %v\n%s", err, output)
+	}
+
+	find := exec.Command(binary, "--json", "find", "git", "config")
+	find.Dir = project
+	find.Env = environment
+	output, err = find.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"command": "git config"`) || !strings.Contains(string(output), `"kind": "sync"`) || !strings.Contains(string(output), `"version_status": "exact"`) {
+		t.Fatalf("offline find: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(controlPath, []byte("fail"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedSync := exec.Command(binary, "--json", "sync", "git", "--dry-run")
+	failedSync.Dir = project
+	failedSync.Env = environment
+	output, err = failedSync.CombinedOutput()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 6 || !strings.Contains(string(output), `"code": "SYNC_FAILED"`) {
+		t.Fatalf("failed sync did not retain cache: %v\n%s", err, output)
+	}
+	find = exec.Command(binary, "--json", "find", "git", "config")
+	find.Dir = project
+	find.Env = environment
+	output, err = find.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"command": "git config"`) || !strings.Contains(string(output), `"version_status": "exact"`) {
+		t.Fatalf("fallback find: %v\n%s", err, output)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := "--version\nhelp --all --no-external-commands --no-aliases --verbose\n--version\n--version\nhelp --all --no-external-commands --no-aliases --verbose\n"
+	if string(calls) != wantCalls {
+		t.Fatalf("Git calls = %q, want %q", calls, wantCalls)
+	}
+	after, err := os.ReadDir(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("sync changed project directory: before=%d after=%d", len(before), len(after))
+	}
+	historyPath := filepath.Join(configHome, "devtize", "history.jsonl")
+	historyContent, err := os.ReadFile(historyPath)
+	if err != nil || !strings.Contains(string(historyContent), `"workflow":"registry.sync"`) || strings.Contains(string(historyContent), "Show the working tree") {
+		t.Fatalf("global sync history: %v\n%s", err, historyContent)
+	}
+}
+
+func buildFakeGit(t *testing.T, directory, logPath, controlPath string) {
+	t.Helper()
+	source := fmt.Sprintf(`package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+func main() {
+	args := strings.Join(os.Args[1:], " ")
+	file, err := os.OpenFile(%q, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil { panic(err) }
+	fmt.Fprintln(file, args)
+	file.Close()
+	switch args {
+	case "--version":
+		fmt.Println("git version 2.50.1")
+	case "help --all --no-external-commands --no-aliases --verbose":
+		if _, err := os.Stat(%q); err == nil {
+			fmt.Print("Main Porcelain Commands\n   commit                  Missing required anchor\n")
+			return
+		}
+		fmt.Print("Main Porcelain Commands\n   status                  Show the working tree status\n   config                  Get and set repository or global options\n")
+	default:
+		os.Exit(2)
+	}
+}
+`, logPath, controlPath)
+	sourcePath := filepath.Join(directory, "fake_git.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(directory, "git")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, sourcePath)
+	command.Env = os.Environ()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build fake git: %v\n%s", err, output)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestBuiltBinaryStatusAndHistoryAreReadOnly(t *testing.T) {
 	root := filepath.Clean("..")

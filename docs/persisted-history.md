@@ -43,6 +43,13 @@ history file automatically.
 does not hide existing records. Reading status or history does not create a new
 history entry.
 
+Confirmed Git knowledge publication records a global `registry.sync` entry
+with no project root. It stores only provider, tool version, old/new snapshot
+digests, bounded counts and limits, approval, and the typed publication result.
+It never stores raw help output, synchronized descriptions, environment data,
+or repository content. Sync dry-runs and declined confirmations do not append
+history.
+
 `dvz undo` performs an exact, project-scoped execution-ID lookup under the same
 one-record and 32-MiB bounds. Duplicate IDs are rejected as `HISTORY_INVALID`.
 Missing observations are never reconstructed from commit messages or

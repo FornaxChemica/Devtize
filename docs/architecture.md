@@ -1,9 +1,11 @@
 # Architecture
 
-Phase C builds on the Phase A read-only paths and Phase B repository workflows with daily commit, composed ship, status, history, and constrained undo-planning commands:
+Phase D.1 builds on the Phase A read-only paths, Phase B repository workflows, and Phase C daily commands with Git-only version-aware discovery sync:
 
 ```text
 cmd/dvz -> internal/app -> internal/search -> internal/registry -> registry/builtin
+cmd/dvz -> internal/app/SyncService -> internal/adapters/git -> internal/process -> git help
+internal/app/SyncService -> internal/registry/CacheStore
 cmd/dvz -> internal/app -> internal/detect -> internal/process -> git or gh
 cmd/dvz -> internal/app -> internal/operation -> internal/safety
 cmd/dvz -> internal/app -> internal/adapters/git -> internal/process -> git
@@ -15,7 +17,9 @@ cmd/dvz -> internal/app -> internal/history
 
 `cmd/dvz` owns Cobra wiring, output streams, JSON encoding, and process exit codes. `internal/ui` owns adaptive human rendering and has no process access. Application services coordinate typed requests and responses without importing Cobra. Registry entries are reviewed discovery metadata or a closed set of executable check capabilities. Search is deterministic and has no process dependency. Detection owns project evidence and tool-version interpretation. `internal/process` is the only general subprocess boundary.
 
-Configuration is loaded before command behavior and is passed as typed state. Domain packages do not import Cobra. The focused `CommitService` reuses operation, history, safety, and Git adapter boundaries without introducing a generic workflow DSL. `raw`, TUI, MCP, and a broad workflow catalog remain absent.
+Configuration is loaded before command behavior and is passed as typed state. Domain packages do not import Cobra. Focused services reuse operation, history, safety, and adapter boundaries without introducing a generic workflow DSL. `raw`, TUI, MCP, and a broad workflow catalog remain absent.
+
+`SyncService` is deliberately provider-specific in this slice. It detects Git, runs one reviewed depth-one help invocation in a temporary isolated directory, parses into an in-memory quarantine snapshot, and asks `CacheStore` to publish only after plan confirmation and tool revalidation. `CacheStore` owns strict schema validation, content addressing, bounded loading, deterministic fallback, permissions, and retention. Search receives a merged in-memory catalog at CLI construction and has no runner dependency.
 
 `StatusService` composes only reviewed Git reads. Local inspection and tracking relation are offline; optional live inspection uses `ls-remote` without fetching. `HistoryService` reads a bounded JSON Lines store through a narrow reader interface and exposes typed entries instead of persisted free-form maps. Neither service enters the mutation plan or confirmation path, and neither records its own read.
 
@@ -23,7 +27,7 @@ Configuration is loaded before command behavior and is passed as typed state. Do
 
 ## Trust Boundary
 
-CLI input, config files, project markers, executable output, and registry descriptions are data, not instructions. Tool detection invokes only fixed version arguments through the process runner. Knowledge returned by `dvz find` contains no callback, executable adapter, or authorization state and cannot be promoted to execution.
+CLI input, config files, project markers, executable output, cache files, and registry descriptions are data, not instructions. Tool detection invokes only fixed version arguments through the process runner. Git sync excludes aliases and external commands, accepts only reviewed help sections and normalized depth-one names, and never invokes a discovered name. Knowledge returned by `dvz find` contains no callback, executable adapter, validator, or authorization state and cannot be promoted to execution.
 
 Mutations enter through application services, immutable typed plans, safety policy, reviewed adapters, postcondition checks, and redacted history. `dvz repo create` groups local-write confirmation separately from remote repository creation and push. Unexpected remotes, detached HEAD, incompatible GitHub repositories, missing auth, and likely secret selections stop before unsafe mutation. The narrow unpublished-initial-commit repair remains in the repository application service and adapter boundary; it is not a general history-editing workflow.
 

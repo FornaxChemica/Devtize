@@ -1,0 +1,11 @@
+See 'git help <command>' to read about a specific subcommand
+
+Main Porcelain Commands
+   status                  Show the working tree status
+   commit                  Record changes to the repository
+
+Ancillary Commands / Manipulators
+   config                  Get and set repository or global options
+
+User-facing repository, command and file interfaces
+   hooks                   Hooks used by Git

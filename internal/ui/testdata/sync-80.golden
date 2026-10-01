@@ -1,0 +1,22 @@
+- Git knowledge sync: validated
+installed Git: 2.50.1 (/usr/bin/git)
+parser: git-help-all v1
+source: git help --all --no-external-commands --no-aliases --verbose
+limits: depth 1; commands 256; output 1048576 bytes; timeout 10000 ms
+cache before: invalid (0 commands)
+parsed commands: 149
+- Plan plan_sync_git_fixture
+digest: sha256:fixture
+dry-run: true
+operations:
+  - registry.knowledge.publish [local_write] Publish validated Git command
+    knowledge
+    effect: write_registry_cache /home/dev/.cache/devtize/registry/v1/git
+warning: ignored invalid registry cache snapshot: snapshot-invalid.json
+result: succeeded
+cache: exact (149 commands)
+snapshot: sha256:new
+  - registry.knowledge.publish: succeeded
+- Error: SYNC_FAILED
+message: Git help inventory could not be synchronized
+next: The last valid cache was retained.

@@ -22,6 +22,7 @@ const (
 	CodePartialExecution       ErrorCode = "PARTIAL_EXECUTION"
 	CodeAIUnavailable          ErrorCode = "AI_UNAVAILABLE"
 	CodeAIOutputInvalid        ErrorCode = "AI_OUTPUT_INVALID"
+	CodeSyncFailed             ErrorCode = "SYNC_FAILED"
 	CodeHistoryWriteFailed     ErrorCode = "HISTORY_WRITE_FAILED"
 	CodeHistoryReadFailed      ErrorCode = "HISTORY_READ_FAILED"
 	CodeHistoryInvalid         ErrorCode = "HISTORY_INVALID"

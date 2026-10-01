@@ -59,12 +59,15 @@ func (e *Engine) Find(query string, limit int) []Result {
 			ID: command.ID, Command: command.Command(), Summary: command.Summary,
 			Provider: command.ProviderID, Source: command.Source, Risk: command.Risk,
 			Effects: append([]string(nil), command.Effects...), VersionRange: command.VersionRange,
-			VersionStatus: "not_checked", Confidence: confidence, MatchReason: reason, Score: score,
+			VersionStatus: versionStatus(command), Confidence: confidence, MatchReason: reason, Score: score,
 		})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Score != results[j].Score {
 			return results[i].Score > results[j].Score
+		}
+		if sourcePriority(results[i].Source.Kind) != sourcePriority(results[j].Source.Kind) {
+			return sourcePriority(results[i].Source.Kind) < sourcePriority(results[j].Source.Kind)
 		}
 		return results[i].ID < results[j].ID
 	})
@@ -72,6 +75,20 @@ func (e *Engine) Find(query string, limit int) []Result {
 		results = results[:limit]
 	}
 	return results
+}
+
+func versionStatus(command registry.CommandKnowledge) string {
+	if command.Source.Kind == "sync" && command.VersionStatus != "" {
+		return command.VersionStatus
+	}
+	return "not_checked"
+}
+
+func sourcePriority(kind string) int {
+	if kind == "builtin" {
+		return 0
+	}
+	return 1
 }
 
 func score(command registry.CommandKnowledge, query string) (int, Confidence, string) {

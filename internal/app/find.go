@@ -7,13 +7,20 @@ import (
 )
 
 type FindService struct {
-	Search *search.Engine
+	Search   *search.Engine
+	Registry FindRegistry
+}
+
+type FindRegistry struct {
+	Status   string   `json:"status"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type FindResponse struct {
 	SchemaVersion int             `json:"schema_version"`
 	Query         string          `json:"query"`
 	Results       []search.Result `json:"results"`
+	Registry      FindRegistry    `json:"registry"`
 }
 
 func (s FindService) Find(words []string) (FindResponse, error) {
@@ -25,5 +32,5 @@ func (s FindService) Find(words []string) (FindResponse, error) {
 	if len(results) == 0 {
 		return FindResponse{}, &Error{Code: CodeCapabilityNotFound, Message: "no reviewed command knowledge matched the intent", Hint: "Try a more specific Git intent."}
 	}
-	return FindResponse{SchemaVersion: 1, Query: query, Results: results}, nil
+	return FindResponse{SchemaVersion: 1, Query: query, Results: results, Registry: s.Registry}, nil
 }

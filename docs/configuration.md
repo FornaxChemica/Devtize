@@ -44,3 +44,5 @@ CLI flags > environment > nearest project config > user config > defaults
 Missing files are valid and use defaults. Files are read with a one-megabyte bound. Configuration contains no secret fields; error rendering still redacts common credential-like assignments and bearer values.
 
 History is stored at `<platform-config-dir>/devtize/history.jsonl`, or beneath `XDG_CONFIG_HOME` when configured. See [Persisted History](persisted-history.md) for its schema, read bounds, and compatibility policy.
+
+Version-aware discovery snapshots are derived state, not configuration. `dvz sync git` stores them beneath `<platform-user-cache>/devtize/registry/v1/git/`; no YAML field can supply an executable, argv, environment value, parser, or cache entry. Removing the registry cache is safe and falls back to reviewed builtins, but Devtize never deletes it automatically as error recovery.

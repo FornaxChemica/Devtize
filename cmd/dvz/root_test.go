@@ -69,13 +69,20 @@ func (s *spyRunner) Run(_ context.Context, spec devprocess.CommandSpec) (devproc
 
 func testDependencies(t *testing.T, runner detect.Runner) dependencies {
 	t.Helper()
+	configDir := t.TempDir()
+	cacheDir := t.TempDir()
 	return dependencies{
 		workingDir: t.TempDir(), environment: map[string]string{}, runner: runner,
-		userConfigDir: func() (string, error) { return t.TempDir(), nil },
+		userConfigDir: func() (string, error) { return configDir, nil },
+		userCacheDir:  func() (string, error) { return cacheDir, nil },
 	}
 }
 
 func execute(t *testing.T, deps dependencies, args ...string) (string, string, error) {
+	return executeInput(t, deps, "", args...)
+}
+
+func executeInput(t *testing.T, deps dependencies, input string, args ...string) (string, string, error) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	command, _, err := newRootCommand(deps, &stdout, &stderr)
@@ -83,8 +90,41 @@ func execute(t *testing.T, deps dependencies, args ...string) (string, string, e
 		t.Fatal(err)
 	}
 	command.SetArgs(args)
+	command.SetIn(strings.NewReader(input))
 	err = command.Execute()
 	return stdout.String(), stderr.String(), err
+}
+
+type syncCLIRunner struct {
+	t     *testing.T
+	calls int
+}
+
+func (r *syncCLIRunner) Run(_ context.Context, spec devprocess.CommandSpec) (devprocess.CommandResult, error) {
+	r.calls++
+	switch strings.Join(spec.Args, " ") {
+	case "--version":
+		return devprocess.CommandResult{Executable: "/tools/git", Stdout: "git version 2.50.1"}, nil
+	case "help --all --no-external-commands --no-aliases --verbose":
+		if spec.Executable != "/tools/git" || spec.Stdin != devprocess.StdinDisabled || spec.CaptureLimit != 1<<20 {
+			r.t.Fatalf("unsafe sync help spec: %#v", spec)
+		}
+		return devprocess.CommandResult{Executable: "/tools/git", Stdout: "Main Porcelain Commands\n   status                  Show the working tree status\n   config                  Get and set repository or global options\n"}, nil
+	default:
+		r.t.Fatalf("unexpected sync subprocess: %s %#v", spec.Executable, spec.Args)
+		return devprocess.CommandResult{}, nil
+	}
+}
+
+func syncDependencies(t *testing.T, runner detect.Runner) (dependencies, string) {
+	t.Helper()
+	configDir := t.TempDir()
+	cacheDir := t.TempDir()
+	return dependencies{
+		workingDir: t.TempDir(), environment: map[string]string{}, runner: runner,
+		userConfigDir: func() (string, error) { return configDir, nil },
+		userCacheDir:  func() (string, error) { return cacheDir, nil },
+	}, cacheDir
 }
 
 func TestHelpAndVersion(t *testing.T) {
@@ -137,6 +177,48 @@ func TestFindTreatsMetacharactersAsData(t *testing.T) {
 	}
 	if runner.calls != 0 {
 		t.Fatalf("metacharacter input invoked process runner %d times", runner.calls)
+	}
+}
+
+func TestSyncDryRunAndConfirmedCacheReuseRemainReadOnlyDuringFind(t *testing.T) {
+	runner := &syncCLIRunner{t: t}
+	deps, cacheDir := syncDependencies(t, runner)
+	stdout, stderr, err := execute(t, deps, "--json", "sync", "git", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dryRun app.SyncResponse
+	if err := json.Unmarshal([]byte(stdout), &dryRun); err != nil {
+		t.Fatalf("dry-run JSON: %v\n%s", err, stdout)
+	}
+	if dryRun.Status != operation.StatusValidated || runner.calls != 2 || stderr != "" || strings.Contains(stdout, "\x1b[") {
+		t.Fatalf("dry-run=%#v calls=%d stderr=%q", dryRun, runner.calls, stderr)
+	}
+	cacheRoot := filepath.Join(cacheDir, "devtize", "registry", "v1")
+	if _, err := os.Stat(cacheRoot); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created cache: %v", err)
+	}
+
+	runner.calls = 0
+	stdout, stderr, err = executeInput(t, deps, "sync\n", "--json", "sync", "git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applied app.SyncResponse
+	if err := json.Unmarshal([]byte(stdout), &applied); err != nil {
+		t.Fatalf("apply JSON: %v\n%s", err, stdout)
+	}
+	if applied.Status != operation.StatusSucceeded || runner.calls != 3 || !strings.Contains(stderr, "Type sync to continue") || strings.Contains(stdout, "Type sync") {
+		t.Fatalf("apply=%#v calls=%d stderr=%q", applied, runner.calls, stderr)
+	}
+
+	runner.calls = 0
+	stdout, _, err = execute(t, deps, "find", "git", "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stdout, "git config\n") || !strings.Contains(stdout, "source: sync") || runner.calls != 0 {
+		t.Fatalf("offline find output=%q calls=%d", stdout, runner.calls)
 	}
 }
 

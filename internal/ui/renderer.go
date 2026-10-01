@@ -90,10 +90,20 @@ func (r *Renderer) Doctor(response app.DoctorResponse) {
 		}
 		r.field(tool.ProviderID, value)
 	}
-	r.field("registry", fmt.Sprintf("%s (%s; %d reviewed builtin entries)", response.Registry.Status, response.Registry.KnowledgeStatus, response.Registry.Entries))
+	entryKind := "searchable entries"
+	if response.Registry.KnowledgeStatus == "builtin_only" || response.Registry.KnowledgeStatus == "cache_invalid" {
+		entryKind = "reviewed builtin entries"
+	}
+	r.field("registry", fmt.Sprintf("%s (%s; %d %s)", response.Registry.Status, response.Registry.KnowledgeStatus, response.Registry.Entries, entryKind))
+	for _, warning := range response.Registry.Warnings {
+		r.warning(warning)
+	}
 }
 
 func (r *Renderer) Find(response app.FindResponse) {
+	for _, warning := range response.Registry.Warnings {
+		r.warning(warning)
+	}
 	for index, result := range response.Results {
 		if index > 0 {
 			fmt.Fprintln(r.w)
@@ -105,6 +115,43 @@ func (r *Renderer) Find(response app.FindResponse) {
 		r.field("match", result.MatchReason+" ("+string(result.Confidence)+")")
 		r.field("versions", result.VersionRange+" ("+result.VersionStatus+")")
 		r.field("effect", strings.Join(result.Effects, "; "))
+	}
+}
+
+func (r *Renderer) SyncPlan(response app.SyncResponse) {
+	r.heading("Git knowledge sync", string(response.Status))
+	r.field("installed Git", response.Installation.Version+" ("+response.Installation.Path+")")
+	r.field("parser", response.Parser.ID+" v"+response.Parser.Version)
+	r.field("source", strings.Join(response.SourceArgv, " "))
+	r.field("limits", fmt.Sprintf("depth %d; commands %d; output %d bytes; timeout %d ms", response.Limits.MaxDepth, response.Limits.MaxCommands, response.Limits.MaxOutputBytes, response.Limits.TimeoutMillis))
+	r.field("cache before", fmt.Sprintf("%s (%d commands)", response.CacheBefore.Status, response.CacheBefore.Commands))
+	r.field("parsed commands", fmt.Sprint(response.ParsedCount))
+	r.planHeader(response.Plan)
+	r.operations(response.Plan.Operations)
+	for _, warning := range response.Warnings {
+		r.warning(warning)
+	}
+}
+
+func (r *Renderer) SyncStarted() {
+	fmt.Fprintf(r.w, "%s %s\n", r.symbol("running"), r.strong("Inspecting isolated local Git help"))
+}
+
+func (r *Renderer) SyncResult(response app.SyncResponse) {
+	r.field("result", string(response.Status))
+	r.field("cache", fmt.Sprintf("%s (%d commands)", response.CacheAfter.Status, response.PublishedCount))
+	if response.CacheAfter.Digest != "" {
+		r.field("snapshot", response.CacheAfter.Digest)
+	}
+	for _, step := range response.Result.Steps {
+		r.bullet(step.CapabilityID + ": " + string(step.Status))
+	}
+	start := response.PlanWarningCount
+	if start < 0 || start > len(response.Warnings) {
+		start = 0
+	}
+	for _, warning := range response.Warnings[start:] {
+		r.warning(warning)
 	}
 }
 
@@ -368,7 +415,9 @@ func (r *Renderer) CheckFinished(result golangadapter.CheckResult) {
 func (r *Renderer) planHeader(plan operation.Plan) {
 	fmt.Fprintf(r.w, "%s %s %s\n", r.symbol("plan"), r.strong("Plan"), plan.ID)
 	r.field("digest", plan.Digest)
-	r.field("project", plan.ProjectRoot)
+	if plan.ProjectRoot != "" {
+		r.field("project", plan.ProjectRoot)
+	}
 	r.field("dry-run", fmt.Sprint(plan.DryRun))
 }
 

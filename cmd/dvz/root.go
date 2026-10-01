@@ -14,6 +14,7 @@ import (
 	"github.com/FornaxChemica/devtize/internal/history"
 	"github.com/FornaxChemica/devtize/internal/operation"
 	devprocess "github.com/FornaxChemica/devtize/internal/process"
+	"github.com/FornaxChemica/devtize/internal/registry"
 	"github.com/FornaxChemica/devtize/internal/search"
 	"github.com/FornaxChemica/devtize/internal/ui"
 	"github.com/FornaxChemica/devtize/registry/builtin"
@@ -44,6 +45,7 @@ type dependencies struct {
 	workingDir    string
 	environment   map[string]string
 	userConfigDir func() (string, error)
+	userCacheDir  func() (string, error)
 	runner        detect.Runner
 }
 
@@ -54,7 +56,7 @@ func defaultDependencies() dependencies {
 	}
 	return dependencies{
 		workingDir: workingDir, environment: config.Environment(os.Environ()),
-		userConfigDir: os.UserConfigDir, runner: devprocess.NewRunner(),
+		userConfigDir: os.UserConfigDir, userCacheDir: os.UserCacheDir, runner: devprocess.NewRunner(),
 	}
 }
 
@@ -82,9 +84,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command, *rootOptions, error) {
-	catalog, err := builtin.Catalog()
+	builtinCatalog, err := builtin.Catalog()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load builtin registry: %w", err)
+	}
+	cache, cacheLoad := loadRegistryCache(deps)
+	commands := builtinCatalog.Commands()
+	if cacheLoad.Snapshot != nil {
+		commands = registry.MergeCommands(commands, cacheLoad.Snapshot.Commands)
+	}
+	catalog, err := registry.NewCatalog(commands)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load merged registry: %w", err)
 	}
 	options := &rootOptions{}
 	root := &cobra.Command{
@@ -100,9 +111,10 @@ func newRootCommand(deps dependencies, stdout, stderr io.Writer) (*cobra.Command
 	root.PersistentFlags().BoolVar(&options.jsonOutput, "json", false, "emit versioned JSON output")
 	root.PersistentFlags().BoolVar(&options.noColor, "no-color", false, "disable colored output")
 
-	findService := app.FindService{Search: search.New(catalog.Commands())}
+	findService := app.FindService{Search: search.New(catalog.Commands()), Registry: app.FindRegistry{Status: string(cacheLoad.Status), Warnings: cacheLoad.Warnings}}
 	root.AddCommand(findCommand(deps, options, findService, stdout))
-	root.AddCommand(doctorCommand(deps, options, catalog.Len(), stdout))
+	root.AddCommand(doctorCommand(deps, options, catalog.Len(), cacheLoad, stdout))
+	root.AddCommand(syncCommand(deps, options, cache, stdout, stderr))
 	root.AddCommand(commitCommand(deps, options, stdout))
 	root.AddCommand(statusCommand(deps, options, stdout))
 	root.AddCommand(historyCommand(deps, options, stdout))
@@ -543,6 +555,73 @@ func localHistoryPath(deps dependencies) string {
 	return filepath.Join(filepath.Dir(configPath), "history.jsonl")
 }
 
+func loadRegistryCache(deps dependencies) (registry.CacheStore, registry.CacheLoadResult) {
+	cacheDir := deps.userCacheDir
+	if cacheDir == nil {
+		cacheDir = os.UserCacheDir
+	}
+	root, err := cacheDir()
+	if err != nil || root == "" {
+		return registry.CacheStore{}, registry.CacheLoadResult{
+			Status: registry.CacheNotSynced, Warnings: []string{"platform user cache directory could not be resolved; reviewed builtins remain available"},
+		}
+	}
+	store := registry.CacheStore{Root: filepath.Join(root, "devtize", "registry", "v1")}
+	loaded, err := store.Load("git")
+	if err != nil {
+		return store, registry.CacheLoadResult{Status: registry.CacheInvalid, Warnings: []string{"registry cache could not be read; reviewed builtins remain available"}}
+	}
+	return store, loaded
+}
+
+func syncCommand(deps dependencies, options *rootOptions, cache registry.CacheStore, stdout, stderr io.Writer) *cobra.Command {
+	var syncOptions app.SyncOptions
+	command := &cobra.Command{
+		Use: "sync <provider>", Short: "Synchronize version-aware discovery knowledge from local official CLI help", Args: cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			syncOptions.Provider = args[0]
+			if syncOptions.Provider != "git" {
+				return &app.Error{Code: app.CodeInvalidUsage, Message: "sync currently supports only the git provider", Hint: "Use dvz sync git."}
+			}
+			if cache.Root == "" {
+				return &app.Error{Code: app.CodeSyncFailed, Message: "platform user cache directory could not be resolved", Hint: "Set a valid platform cache directory and retry."}
+			}
+			loaded, err := loadConfig(deps, options)
+			if err != nil {
+				return app.Wrap(app.CodeConfigInvalid, config.Redact(err.Error()), err)
+			}
+			promptOutput := stdout
+			var renderer *ui.Renderer
+			if options.jsonOutput {
+				promptOutput = stderr
+			} else {
+				renderer = ui.New(stdout, humanUIOptions(deps, loaded.Config))
+				renderer.SyncStarted()
+			}
+			service := app.SyncService{
+				WorkingDir: deps.workingDir, Cache: cache, CacheRoot: cache.Root, Runner: deps.runner,
+				History: history.Store{Path: localHistoryPath(deps)}, HistoryEnabled: loaded.Config.History.Enabled, Output: promptOutput,
+			}
+			response, err := service.Plan(command.Context(), syncOptions)
+			if err != nil {
+				return err
+			}
+			if !options.jsonOutput {
+				renderer.SyncPlan(response)
+			}
+			response, err = service.ExecutePlanned(command.Context(), syncOptions, command.InOrStdin(), response)
+			if options.jsonOutput {
+				_ = writeJSON(stdout, response)
+			} else if response.Result.Status != "" {
+				renderer.SyncResult(response)
+			}
+			return err
+		},
+	}
+	command.Flags().BoolVar(&syncOptions.DryRun, "dry-run", false, "validate and render the sync plan without writing cache or history")
+	return command
+}
+
 func findCommand(deps dependencies, options *rootOptions, service app.FindService, stdout io.Writer) *cobra.Command {
 	return &cobra.Command{
 		Use: "find <intent>", Short: "Find reviewed command knowledge without executing it", Args: cobra.MinimumNArgs(1),
@@ -564,7 +643,7 @@ func findCommand(deps dependencies, options *rootOptions, service app.FindServic
 	}
 }
 
-func doctorCommand(deps dependencies, options *rootOptions, registryCount int, stdout io.Writer) *cobra.Command {
+func doctorCommand(deps dependencies, options *rootOptions, registryCount int, cacheLoad registry.CacheLoadResult, stdout io.Writer) *cobra.Command {
 	return &cobra.Command{
 		Use: "doctor", Short: "Inspect local Devtize readiness without making changes", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
@@ -585,7 +664,7 @@ func doctorCommand(deps dependencies, options *rootOptions, registryCount int, s
 			}
 			service := app.DoctorService{
 				WorkingDir: deps.workingDir, Project: detect.DetectProject,
-				Tools: detect.ToolDetector{Runner: deps.runner}, RegistryCount: registryCount, ToolStateDir: toolStateDir,
+				Tools: detect.ToolDetector{Runner: deps.runner}, RegistryCount: registryCount, RegistryCache: cacheLoad, ToolStateDir: toolStateDir,
 			}
 			response, err := service.Run(command.Context(), check)
 			if err != nil {
@@ -664,7 +743,7 @@ func exitCode(err error) int {
 		return exitMissingDependency
 	case app.CodeAuthRequired:
 		return exitMissingDependency
-	case app.CodeCheckFailed, app.CodeProcessTimeout, app.CodeProcessFailed, app.CodePartialExecution, app.CodeHistoryWriteFailed, app.CodeHistoryReadFailed, app.CodePostconditionFailed:
+	case app.CodeCheckFailed, app.CodeProcessTimeout, app.CodeProcessFailed, app.CodeSyncFailed, app.CodePartialExecution, app.CodeHistoryWriteFailed, app.CodeHistoryReadFailed, app.CodePostconditionFailed:
 		return exitProcessFailure
 	case app.CodeHistoryInvalid:
 		return exitInvalid

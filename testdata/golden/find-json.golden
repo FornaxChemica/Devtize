@@ -21,5 +21,8 @@
       "confidence": "high",
       "match_reason": "exact reviewed phrase"
     }
-  ]
+  ],
+  "registry": {
+    "status": "not_synced"
+  }
 }

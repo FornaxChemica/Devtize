@@ -1,0 +1,17 @@
+See 'git help <command>' to read about a specific subcommand
+
+Main Porcelain Commands
+   clone                   Clone a repository into a new directory
+   status                  Show the working tree status
+
+Ancillary Commands / Interrogators
+   version                 Display version information about Git
+
+Interacting with Others
+   send-email              Send a collection of patches as emails
+
+Low-level Commands / Interrogators
+   rev-parse               Pick out and massage parameters
+
+Developer-facing file formats, protocols and other interfaces
+   protocol-v2             Git Wire Protocol, Version 2

@@ -1,0 +1,5 @@
+git clone	Clone a repository into a new directory
+git rev-parse	Pick out and massage parameters
+git send-email	Send a collection of patches as emails
+git status	Show the working tree status
+git version	Display version information about Git

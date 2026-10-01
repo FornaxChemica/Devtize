@@ -1,0 +1,3 @@
+git commit	Record changes to the repository
+git config	Get and set repository or global options
+git status	Show the working tree status

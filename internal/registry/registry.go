@@ -1,10 +1,12 @@
 package registry
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/FornaxChemica/devtize/internal/safety"
 )
@@ -18,9 +20,29 @@ const (
 )
 
 type KnowledgeSource struct {
-	Kind    string `json:"kind" yaml:"kind"`
-	Locator string `json:"locator" yaml:"locator"`
-	Digest  string `json:"digest" yaml:"digest"`
+	Kind          string    `json:"kind" yaml:"kind"`
+	Locator       string    `json:"locator" yaml:"locator"`
+	Digest        string    `json:"digest" yaml:"digest"`
+	ToolVersion   string    `json:"tool_version,omitempty" yaml:"tool_version,omitempty"`
+	ParserVersion string    `json:"parser_version,omitempty" yaml:"parser_version,omitempty"`
+	CapturedAt    time.Time `json:"captured_at,omitempty" yaml:"captured_at,omitempty"`
+}
+
+func (s KnowledgeSource) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Kind          string     `json:"kind"`
+		Locator       string     `json:"locator"`
+		Digest        string     `json:"digest"`
+		ToolVersion   string     `json:"tool_version,omitempty"`
+		ParserVersion string     `json:"parser_version,omitempty"`
+		CapturedAt    *time.Time `json:"captured_at,omitempty"`
+	}
+	value := wire{Kind: s.Kind, Locator: s.Locator, Digest: s.Digest, ToolVersion: s.ToolVersion, ParserVersion: s.ParserVersion}
+	if !s.CapturedAt.IsZero() {
+		captured := s.CapturedAt
+		value.CapturedAt = &captured
+	}
+	return json.Marshal(value)
 }
 
 type CommandKnowledge struct {
@@ -36,6 +58,7 @@ type CommandKnowledge struct {
 	Effects       []string        `json:"effects" yaml:"effects"`
 	Source        KnowledgeSource `json:"source" yaml:"source"`
 	Support       SupportLevel    `json:"support" yaml:"support"`
+	VersionStatus string          `json:"version_status,omitempty" yaml:"version_status,omitempty"`
 }
 
 func (k CommandKnowledge) Command() string {
@@ -60,17 +83,32 @@ func (k CommandKnowledge) Validate() error {
 	if strings.TrimSpace(k.Summary) == "" {
 		return fmt.Errorf("%s: summary is required", k.ID)
 	}
-	if !k.Risk.Valid() {
+	if !k.Risk.Valid() && !(k.Source.Kind == "sync" && k.Risk == safety.Risk("unclassified")) {
 		return fmt.Errorf("%s: invalid risk %q", k.ID, k.Risk)
 	}
 	if len(k.Effects) == 0 {
 		return fmt.Errorf("%s: at least one effect is required", k.ID)
 	}
-	if k.Source.Kind != "builtin" || k.Source.Locator == "" || k.Source.Digest == "" {
-		return fmt.Errorf("%s: complete builtin provenance is required", k.ID)
+	if k.Source.Locator == "" || k.Source.Digest == "" {
+		return fmt.Errorf("%s: complete provenance is required", k.ID)
+	}
+	switch k.Source.Kind {
+	case "builtin":
+		if k.Source.ToolVersion != "" || k.Source.ParserVersion != "" || !k.Source.CapturedAt.IsZero() {
+			return fmt.Errorf("%s: builtin provenance cannot contain sync metadata", k.ID)
+		}
+	case "sync":
+		if k.Source.ToolVersion == "" || k.Source.ParserVersion == "" || k.Source.CapturedAt.IsZero() {
+			return fmt.Errorf("%s: complete sync provenance is required", k.ID)
+		}
+		if k.VersionStatus != "exact" && k.VersionStatus != "stale" {
+			return fmt.Errorf("%s: invalid sync version status %q", k.ID, k.VersionStatus)
+		}
+	default:
+		return fmt.Errorf("%s: unsupported provenance kind %q", k.ID, k.Source.Kind)
 	}
 	if k.Support != SupportDiscoverable {
-		return fmt.Errorf("%s: Phase A knowledge must be discoverable only", k.ID)
+		return fmt.Errorf("%s: command knowledge must be discoverable only", k.ID)
 	}
 	return nil
 }

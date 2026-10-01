@@ -7,6 +7,7 @@ import (
 
 	"github.com/FornaxChemica/devtize/internal/app"
 	"github.com/FornaxChemica/devtize/internal/detect"
+	"github.com/FornaxChemica/devtize/internal/registry"
 	"github.com/FornaxChemica/devtize/internal/search"
 	"github.com/FornaxChemica/devtize/registry/builtin"
 )
@@ -24,11 +25,13 @@ func TestFindJoinsOrdinaryTrailingWords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := (app.FindService{Search: search.New(catalog.Commands())}).Find([]string{"initialize", "git", "repository"})
+	response, err := (app.FindService{
+		Search: search.New(catalog.Commands()), Registry: app.FindRegistry{Status: "invalid", Warnings: []string{"cache ignored"}},
+	}).Find([]string{"initialize", "git", "repository"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Query != "initialize git repository" || response.Results[0].Command != "git init" {
+	if response.Query != "initialize git repository" || response.Results[0].Command != "git init" || response.Registry.Status != "invalid" || len(response.Registry.Warnings) != 1 {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 }
@@ -71,6 +74,25 @@ func TestDoctorIsolatesGitHubState(t *testing.T) {
 	}
 	if detector.ghSpec.EnvOverlay["HOME"] != "/isolated" || detector.ghSpec.EnvOverlay["GH_CONFIG_DIR"] == "" || detector.ghSpec.EnvOverlay["XDG_STATE_HOME"] == "" {
 		t.Fatalf("gh environment was not isolated: %#v", detector.ghSpec.EnvOverlay)
+	}
+}
+
+func TestDoctorReportsSyncedKnowledgeStaleAgainstLiveGit(t *testing.T) {
+	service := app.DoctorService{
+		WorkingDir: "/work", RegistryCount: 20,
+		RegistryCache: registry.CacheLoadResult{Status: registry.CacheExact, Snapshot: &registry.ProviderSnapshot{KnowledgeVersion: "2.50.1"}},
+		Project:       func(string) (detect.Project, error) { return detect.Project{Status: "detected", Root: "/work"}, nil },
+		Tools: toolDetector{installations: map[string]detect.ToolInstallation{
+			"git": {ProviderID: "git", Status: detect.ToolInstalled, Version: "2.51.0"},
+			"gh":  {ProviderID: "gh", Status: detect.ToolInstalled},
+		}},
+	}
+	response, err := service.Run(context.Background(), app.ConfigCheck{Status: "valid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "warning" || response.Registry.KnowledgeStatus != "synced_stale" || response.Registry.Source != "builtin+sync" {
+		t.Fatalf("response=%#v", response)
 	}
 }
 

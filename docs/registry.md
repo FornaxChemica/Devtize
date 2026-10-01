@@ -1,10 +1,10 @@
 # Registry And Search
 
-The registry ships twelve reviewed Git command knowledge entries. Each entry has a stable knowledge ID, provider and command path, summary, aliases, intent phrases, examples, version note, risk/effect metadata, discoverable support level, source locator, and corpus digest.
+The registry ships twelve reviewed Git command knowledge entries. Each entry has a stable knowledge ID, provider and command path, summary, aliases, intent phrases, examples, version note, risk/effect metadata, discoverable support level, source locator, and corpus digest. Phase D.1 can supplement them with a validated local snapshot from the exact installed Git version.
 
 Command knowledge is not a capability. It has no validator, adapter binding, execution function, or permission grant. `dvz find` can render it but cannot run it.
 
-Search normalizes case and tokens, then ranks exact command paths, exact reviewed phrases, complete token matches, prefix matches, and conservative fuzzy matches. Scores use stable ID ordering for ties. Exact and reviewed matches outrank fuzzy matches, and unrelated low-confidence input returns no result. Phase A results report their reviewed version range with `not_checked` status because search does not run tool detection.
+Search normalizes case and tokens, then ranks exact command paths, exact reviewed phrases, complete token matches, prefix matches, and conservative fuzzy matches. Scores use source priority and stable ID ordering for ties. A reviewed builtin wins any duplicate normalized path; builtin ties outrank synced entries. Builtins retain `not_checked` compatibility status. Synced results report `exact` or `stale` and include tool/parser/capture provenance. Search does not run tool detection or any provider process.
 
 Phase B also has trusted capabilities implemented in source code, not inferred from command knowledge:
 
@@ -34,4 +34,16 @@ Phase C adds four reviewed executable check capabilities: `go.format.check`, `go
 
 `git.commit.uncommit_preserve_changes` is a reviewed planner-only compensation for a verified `git.commit.create` transition. Its intended future behavior is a narrowly bound mixed reset to the verified parent, classified `local_write`. It is currently `planned`, has no executable adapter binding, and can appear only in an eligible `dvz undo ... --dry-run` plan. History cannot register or select another capability.
 
-The corpus is available offline. A future `dvz sync` may supplement it with bounded, version-matched CLI help, but introspected help will remain quarantined discovery data with provenance and cannot create trusted mutation capabilities.
+## Git Knowledge Sync
+
+`dvz sync git` detects the installed version and invokes exactly:
+
+```text
+git help --all --no-external-commands --no-aliases --verbose
+```
+
+The versioned parser accepts only depth-one rows from main porcelain, ancillary, interacting-with-others, and low-level sections. It requires `git status`, rejects malformed/duplicate/oversized inventories, caps output at one MiB and commands at 256, and marks every generated row `discoverable` with risk `unclassified`. It does not parse aliases, flags, nested help, repository/file-format docs, or network sources.
+
+Validated snapshots live at `<platform-user-cache>/devtize/registry/v1/git/snapshot-<sha256>.json`. Files are strict schema version 1, content-addressed, immutable, loaded under file/count/byte bounds, and retained three deep after successful publication. Temporary, corrupt, oversized, and incompatible files are ignored with diagnostics. The newest valid snapshot is used; reviewed builtins remain available even when every cache file is invalid.
+
+Cache deletion is a safe loss of derived discovery data. It does not affect configuration, history, repositories, or trusted capabilities, and a later confirmed sync can rebuild it. Devtize does not delete invalid cache data automatically. Additional providers require their own reviewed parser and source design; Git parsing rules do not become a generic plugin contract.
